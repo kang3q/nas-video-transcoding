@@ -63,7 +63,7 @@ func main() {
 	mux.HandleFunc("/__nvt/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
-	mux.Handle("/", readOnly(withMethod(serveMedia(fsys, quiet(dav)))))
+	mux.Handle("/", readOnly(withMethod(serveMedia(cfg, fsys, quiet(dav)))))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -78,7 +78,8 @@ func main() {
 	log.Printf("playable audio: %s", strings.Join(cfg.AudioOK, ","))
 	log.Printf("convert to: %s %s, jobs=%d, wait=%v",
 		cfg.AudioCodec, cfg.AudioBitrate, cfg.TranscodeJobs, cfg.WaitForComplete)
-	log.Printf("prefetch=%v max=%d video=%v", cfg.PrefetchOnList, cfg.PrefetchMax, cfg.PrefetchVideo)
+	log.Printf("prefetch=%v max=%d video=%v log_requests=%v",
+		cfg.PrefetchOnList, cfg.PrefetchMax, cfg.PrefetchVideo, cfg.LogRequests)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -125,11 +126,18 @@ func readOnly(next http.Handler) http.Handler {
 // So an unfinished conversion is streamed with no Content-Length at all. That
 // costs seeking until the job finishes, which is the honest trade; every
 // finished file still goes through ServeContent and seeks normally.
-func serveMedia(fsys *vfs.FS, next http.Handler) http.Handler {
+func serveMedia(cfg *config.Config, fsys *vfs.FS, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			next.ServeHTTP(w, r)
 			return
+		}
+		if cfg.LogRequests {
+			if rng := r.Header.Get("Range"); rng != "" {
+				log.Printf("%s %s range=%s", r.Method, r.URL.Path, rng)
+			} else {
+				log.Printf("%s %s", r.Method, r.URL.Path)
+			}
 		}
 
 		f, err := fsys.OpenFile(r.Context(), r.URL.Path, os.O_RDONLY, 0)

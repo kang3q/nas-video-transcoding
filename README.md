@@ -163,6 +163,7 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 | `NVT_CACHE_MAX_GB` | `100` | LRU 제거 기준 |
 | `NVT_TRANSCODE_JOBS` | `1` | 동시 ffmpeg 작업 수 (오디오 전용이면 2 이상 권장) |
 | `NVT_PROBE_WORKERS` | `6` | 동시 ffprobe 호출 수 |
+| `NVT_LOG_REQUESTS` | `true` | GET·HEAD 요청과 Range 헤더를 로그에 남김 |
 | `NVT_PREFETCH` | `false` | 폴더를 열 때 그 안의 파일을 미리 변환 |
 | `NVT_PREFETCH_MAX` | `3` | 한 폴더에서 미리 변환할 최대 개수 |
 | `NVT_PREFETCH_VIDEO` | `false` | 영상 재인코딩까지 추측으로 시작할지 |
@@ -180,6 +181,8 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
    **탐색만으로는 아무것도 변환하지 않습니다.**
 2. 플레이어가 `GET`을 보냅니다. 이 작업은 **재생 우선순위**로 큐에 들어가
    추측성 작업을 앞지르며, 필요하면 실행 중인 프리페치를 중단시킵니다.
+   `HEAD`는 재생이 아니므로 아무것도 시작하지 않습니다 — 변환 전이라면
+   크기를 모르므로 `Content-Length` 없이 답합니다.
 3. 동시에 **같은 폴더의 다음 파일 하나**가 예약됩니다. 다음 화를 이어 볼
    확률이 높기 때문입니다. 예약은 이 한 개뿐입니다.
 4. 변환이 끝나 있으면 평범한 정적 파일로 서빙됩니다 — 정확한

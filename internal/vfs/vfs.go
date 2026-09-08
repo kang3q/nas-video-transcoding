@@ -43,12 +43,12 @@ func WithMethod(ctx context.Context, method string) context.Context {
 	return context.WithValue(ctx, methodKey{}, method)
 }
 
+// isPlayback reports whether the request wants content rather than metadata.
+// HEAD does not qualify: it asks what a file is, not for the file, and a
+// player issuing one must not set a conversion running.
 func isPlayback(ctx context.Context) bool {
-	switch m, _ := ctx.Value(methodKey{}).(string); m {
-	case "GET", "HEAD":
-		return true
-	}
-	return false
+	m, _ := ctx.Value(methodKey{}).(string)
+	return m == "GET"
 }
 
 // mediaExt lists containers worth probing. Anything else (subtitles, artwork,
@@ -134,9 +134,9 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMo
 		return f.openDir(ctx, virt)
 	}
 	if !isPlayback(ctx) {
-		// A listing only ever asks for Stat. Handing back real content here
-		// would open a file per entry, or worse, start converting one.
-		return &metaFile{fi: f.infoFor(e)}, nil
+		// A listing, or a HEAD, only wants metadata. Handing back real content
+		// here would open a file per entry, or worse, start converting one.
+		return &metaFile{fi: f.infoFor(e), complete: f.settled(e)}, nil
 	}
 	if !e.plan.NeedsWork() {
 		return f.openReal(e)
@@ -470,6 +470,15 @@ func (f *FS) key(e entry) string {
 		f.cfg.AudioCodec, f.cfg.AudioBitrate,
 		f.cfg.VideoCodec, f.cfg.VideoPreset, f.cfg.VideoCRF,
 	)
+}
+
+// settled reports whether the advertised file exists in full, and therefore
+// whether anything we say about its size is true.
+func (f *FS) settled(e entry) bool {
+	if e.isDir || !e.plan.NeedsWork() {
+		return true
+	}
+	return f.cache.Complete(f.key(e))
 }
 
 func (f *FS) infoFor(e entry) *info {

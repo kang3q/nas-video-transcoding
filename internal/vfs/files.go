@@ -77,8 +77,13 @@ func (n *namedFile) Write([]byte) (int, error)  { return 0, errReadOnly }
 // metaFile answers property lookups without touching content. WebDAV opens
 // every file it lists; this is what it gets.
 type metaFile struct {
-	fi fs.FileInfo
+	fi       fs.FileInfo
+	complete bool
 }
+
+// Incomplete keeps a HEAD from advertising a size we only guessed at: until
+// the conversion exists, its length is the source file's, which is wrong.
+func (m *metaFile) Incomplete() bool { return !m.complete }
 
 func (m *metaFile) Close() error               { return nil }
 func (m *metaFile) Stat() (fs.FileInfo, error) { return m.fi, nil }

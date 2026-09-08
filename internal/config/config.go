@@ -64,6 +64,11 @@ type Config struct {
 	WaitTimeout     time.Duration
 
 	ProbeTimeout time.Duration
+
+	// LogRequests records every GET and HEAD with its Range header. Players
+	// differ in how they probe a share before playing it, and the difference
+	// decides what a request is allowed to set running.
+	LogRequests bool
 }
 
 func Load() *Config {
@@ -106,6 +111,7 @@ func Load() *Config {
 		WaitForComplete: envBool("NVT_WAIT_COMPLETE", true),
 		WaitTimeout:     time.Duration(envInt("NVT_WAIT_TIMEOUT_SEC", 1800)) * time.Second,
 		ProbeTimeout:    time.Duration(envInt("NVT_PROBE_TIMEOUT_SEC", 20)) * time.Second,
+		LogRequests:     envBool("NVT_LOG_REQUESTS", true),
 	}
 	if c.TranscodeJobs < 1 {
 		c.TranscodeJobs = 1
