@@ -13,14 +13,14 @@
       <a class="name" href="/browse/{{.Rel}}">{{.Name}}</a>
     {{else if .IsVideo}}
       <div class="line">
-        <span class="name">{{.Name}}</span>
+        <a class="name" href="/watch/{{.Rel}}">{{.Name}}</a>
         <span class="meta">{{size .Size}}</span>
         {{if .Converted}}<span class="tag ok">변환됨</span>{{end}}
         {{if .Job}}<span class="tag run" data-job="{{.Job.ID}}">{{pct .Job.Percent}}</span>{{end}}
       </div>
       <div class="actions">
         {{if .Converted}}<a class="btn play" href="{{.WatchURL}}">재생</a>{{end}}
-        <form method="post" action="/convert">
+        <form method="post" action="/convert" title="자막을 고르려면 파일 이름을 누르세요">
           <input type="hidden" name="rel" value="{{.Rel}}">
           <button name="scope" value="file">이 파일만</button>
           <button name="scope" value="onwards">여기서부터 끝까지</button>

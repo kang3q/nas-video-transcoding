@@ -47,13 +47,26 @@ var (
 
 // Options are the choices made when a batch is started.
 type Options struct {
-	// BurnSubs is a subtitle file to draw into the picture. Already copied to
-	// a safe, simple path by the caller.
-	BurnSubs string
+	// Subtitles draws a subtitle track into the picture. Irreversible, and it
+	// forces a re-encode even when the codecs would have allowed a copy.
+	Subtitles bool
+	// PickedSubtitleID applies to the first file only. A folder conversion
+	// cannot ask about every episode.
+	PickedSubtitleID string
+	// SubtitleLang is what the rest of the batch looks for: whatever language
+	// the viewer chose. Episodes without it get no subtitles rather than a
+	// language nobody asked for burned in permanently.
+	SubtitleLang string
 	// Live also produces an HLS rendition, so the job can be watched before it
 	// finishes. Costs a little disk and almost no CPU: the encode happens once
 	// either way.
 	Live bool
+}
+
+// SubResolver produces the subtitle file to burn into one video, or "" when
+// there is nothing to burn.
+type SubResolver interface {
+	Resolve(ctx context.Context, jobID string, rel outpath.Rel, preferredID, preferLang string) (path string, cleanup func(), err error)
 }
 
 type Job struct {
@@ -64,6 +77,7 @@ type Job struct {
 
 	src, part, dst, liveDir string
 	opts                    Options
+	preferredSub            string
 
 	mu        sync.Mutex
 	state     State
@@ -160,12 +174,13 @@ type Prober interface {
 }
 
 type Queue struct {
-	mapper   *outpath.Mapper
-	prober   Prober
-	runner   ffmpeg.Runner
-	settings ffmpeg.Settings
-	workers  int
-	liveRoot string
+	mapper    *outpath.Mapper
+	prober    Prober
+	runner    ffmpeg.Runner
+	subtitles SubResolver
+	settings  ffmpeg.Settings
+	workers   int
+	liveRoot  string
 	// checkpointAt is the fraction of the first file in a batch to reach
 	// before asking whether the result looks right. Far enough in that an
 	// opening sequence is over and burned-in subtitles are on screen.
@@ -189,6 +204,7 @@ type Deps struct {
 	Mapper       *outpath.Mapper
 	Prober       Prober
 	Runner       ffmpeg.Runner
+	Subs         SubResolver
 	Settings     ffmpeg.Settings
 	Workers      int
 	LiveRoot     string
@@ -203,7 +219,7 @@ func NewQueue(d Deps) *Queue {
 		d.CheckpointAt = 0.10
 	}
 	q := &Queue{
-		mapper: d.Mapper, prober: d.Prober, runner: d.Runner,
+		mapper: d.Mapper, prober: d.Prober, runner: d.Runner, subtitles: d.Subs,
 		settings: d.Settings, workers: d.Workers,
 		liveRoot: d.LiveRoot, checkpointAt: d.CheckpointAt,
 		jobs: map[string]*Job{}, batches: map[string]*Batch{},
@@ -260,6 +276,9 @@ func (q *Queue) Enqueue(dir outpath.Rel, rels []outpath.Rel, opts Options) (*Bat
 		}
 		if opts.Live {
 			j.liveDir = filepath.Join(q.liveRoot, j.ID)
+		}
+		if opts.Subtitles && len(created) == 0 {
+			j.preferredSub = opts.PickedSubtitleID
 		}
 		q.jobs[j.ID] = j
 		q.byOutput[dst] = j.ID
@@ -532,12 +551,13 @@ func (q *Queue) run(j *Job) {
 
 	q.emit(Event{Kind: "state", Job: j.View(), BatchID: j.BatchID})
 
-	spec, err := q.plan(ctx, j)
+	spec, cleanupSubs, err := q.plan(ctx, j)
 	if err != nil {
 		j.finish(Failed, err.Error())
 		q.release(j)
 		return
 	}
+	defer cleanupSubs()
 
 	if err := os.MkdirAll(filepath.Dir(j.dst), 0o755); err != nil {
 		j.finish(Failed, err.Error())
@@ -586,19 +606,24 @@ func (q *Queue) run(j *Job) {
 	log.Printf("convert done: %s in %s", j.Rel.String(), time.Since(j.startedAt).Round(time.Second))
 }
 
-// plan probes the source and decides how much work it needs.
-func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, error) {
+// plan probes the source, works out how much work it needs, and gets any
+// subtitle ready. The returned cleanup removes the temporary subtitle file.
+func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
+	noop := func() {}
+
 	fi, err := os.Stat(j.src)
 	if err != nil {
-		return ffmpeg.Spec{}, err
+		return ffmpeg.Spec{}, noop, err
 	}
+	// Probe before resolving subtitles: the subtitle finder reads the embedded
+	// track list out of this result.
 	info, err := q.prober.Probe(ctx, j.src, fi)
 	if err != nil {
-		return ffmpeg.Spec{}, err
+		return ffmpeg.Spec{}, noop, err
 	}
 	video, ok := info.Video()
 	if !ok {
-		return ffmpeg.Spec{}, fmt.Errorf("no video stream in %s", j.Name)
+		return ffmpeg.Spec{}, noop, fmt.Errorf("no video stream in %s", j.Name)
 	}
 
 	audioIdx := -1
@@ -606,9 +631,18 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, error) {
 		audioIdx = audio[0].Index
 	}
 
+	var burn string
+	cleanup := noop
+	if j.opts.Subtitles && q.subtitles != nil {
+		burn, cleanup, err = q.subtitles.Resolve(ctx, j.ID, j.Rel, j.preferredSub, j.opts.SubtitleLang)
+		if err != nil {
+			return ffmpeg.Spec{}, noop, err
+		}
+	}
+
 	// Burning subtitles means redrawing every frame, so the copy shortcut is
 	// off however convenient the codecs are.
-	remux := info.RemuxOnly() && j.opts.BurnSubs == ""
+	remux := info.RemuxOnly() && burn == ""
 
 	j.setPlan(time.Duration(info.Duration*float64(time.Second)), remux)
 
@@ -617,9 +651,9 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, error) {
 		Remux:      remux,
 		VideoIndex: video.Index,
 		AudioIndex: audioIdx,
-		BurnSubs:   j.opts.BurnSubs,
+		BurnSubs:   burn,
 		LiveDir:    j.liveDir,
-	}, nil
+	}, cleanup, nil
 }
 
 func (q *Queue) onProgress(j *Job, p ffmpeg.Progress) {

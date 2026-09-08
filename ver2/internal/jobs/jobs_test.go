@@ -465,6 +465,43 @@ func TestRemuxIsChosenFromTheProbeNotTheExtension(t *testing.T) {
 	}
 }
 
+// A resolver that hands back a fixed path, and records what it was asked for.
+type fakeSubs struct {
+	path      string
+	err       error
+	mu        sync.Mutex
+	asked     []string
+	langs     []string
+	cleanedUp int
+}
+
+func (f *fakeSubs) Resolve(_ context.Context, _ string, _ outpath.Rel, preferred, lang string) (string, func(), error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, preferred)
+	f.langs = append(f.langs, lang)
+	f.mu.Unlock()
+	if f.err != nil {
+		return "", func() {}, f.err
+	}
+	return f.path, func() { f.mu.Lock(); f.cleanedUp++; f.mu.Unlock() }, nil
+}
+
+func (f *fakeSubs) preferences() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.asked...)
+}
+
+func h264Only() mediainfo.Info {
+	return mediainfo.Info{
+		Duration: 60,
+		Streams: []mediainfo.Stream{
+			{Index: 0, Type: "video", Codec: "h264"},
+			{Index: 1, Type: "audio", Codec: "aac"},
+		},
+	}
+}
+
 // Burning subtitles redraws every frame, so the copy shortcut cannot apply.
 func TestBurningSubtitlesDisablesRemux(t *testing.T) {
 	var gotRemux bool
@@ -474,16 +511,12 @@ func TestBurningSubtitlesDisablesRemux(t *testing.T) {
 		return writeOutput(spec)
 	}}
 	h := newHarness(t, runner, 1, "a.mkv")
-	h.q.prober = fakeProber{info: mediainfo.Info{
-		Duration: 60,
-		Streams: []mediainfo.Stream{
-			{Index: 0, Type: "video", Codec: "h264"},
-			{Index: 1, Type: "audio", Codec: "aac"},
-		},
-	}}
+	h.q.prober = fakeProber{info: h264Only()}
+	resolver := &fakeSubs{path: "/tmp/x.ass"}
+	h.q.subtitles = resolver
 
 	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
-		Options{BurnSubs: "/tmp/x.ass"}); err != nil {
+		Options{Subtitles: true, PickedSubtitleID: "embedded:2"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
@@ -493,6 +526,86 @@ func TestBurningSubtitlesDisablesRemux(t *testing.T) {
 	if gotSubs != "/tmp/x.ass" {
 		t.Errorf("BurnSubs = %q", gotSubs)
 	}
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	if resolver.cleanedUp != 1 {
+		t.Errorf("the temporary subtitle was cleaned up %d times, want 1", resolver.cleanedUp)
+	}
+}
+
+// Only the first file of a batch carries the viewer's choice. Nobody picks a
+// track for episode 17 of a folder conversion, so the rest resolve their own.
+func TestOnlyTheFirstJobUsesThePickedSubtitle(t *testing.T) {
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "S/ep1.mkv", "S/ep2.mkv", "S/ep3.mkv")
+	h.q.prober = fakeProber{info: h264Only()}
+	resolver := &fakeSubs{path: "/tmp/x.ass"}
+	h.q.subtitles = resolver
+
+	files := []outpath.Rel{h.rel(t, "S/ep1.mkv"), h.rel(t, "S/ep2.mkv"), h.rel(t, "S/ep3.mkv")}
+	if _, err := h.q.Enqueue(h.rel(t, "S"), files,
+		Options{Subtitles: true, PickedSubtitleID: "embedded:4", SubtitleLang: "kor"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "all three", func() bool { return len(resolver.preferences()) == 3 })
+
+	got := resolver.preferences()
+	if got[0] != "embedded:4" {
+		t.Errorf("first job asked for %q, want the picked track", got[0])
+	}
+	for _, p := range got[1:] {
+		if p != "" {
+			t.Errorf("a later job was given the picked track %q", p)
+		}
+	}
+
+	// They are given the language instead, so they stay in it.
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	for i, l := range resolver.langs {
+		if l != "kor" {
+			t.Errorf("job %d was asked for language %q, want kor", i, l)
+		}
+	}
+}
+
+func TestSubtitlesOffMeansTheResolverIsNotConsulted(t *testing.T) {
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		if spec.BurnSubs != "" {
+			t.Errorf("subtitles were burned without being asked for: %q", spec.BurnSubs)
+		}
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv")
+	resolver := &fakeSubs{path: "/tmp/x.ass"}
+	h.q.subtitles = resolver
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
+	if n := len(resolver.preferences()); n != 0 {
+		t.Errorf("the resolver was consulted %d times with subtitles off", n)
+	}
+}
+
+// A subtitle that cannot be prepared fails the job rather than silently
+// producing a file without the subtitles that were asked for.
+func TestSubtitleFailureFailsTheJob(t *testing.T) {
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		t.Error("the conversion ran despite the subtitle failing")
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv")
+	h.q.subtitles = &fakeSubs{err: errors.New("cp949 decode failed")}
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
+		Options{Subtitles: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job to fail", func() bool { return h.states()["a.mkv"] == Failed })
 }
 
 func TestProgressReachesTheView(t *testing.T) {

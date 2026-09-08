@@ -35,10 +35,14 @@
     <label>자막 굽기
       <select name="subs">
         <option value="">굽지 않음</option>
-        {{range .Subs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+        {{range .Subs}}<option value="{{.ID}}" {{if not .Burnable}}disabled{{end}}>{{.Label}}</option>{{end}}
       </select>
     </label>
-    <p class="hint">구운 자막은 끌 수 없고, 영상을 다시 그려야 하므로 시간이 더 걸립니다.</p>
+    <p class="hint">
+      구운 자막은 끌 수 없고, 영상을 다시 그려야 하므로 컨테이너만 바꾸면 될 파일도
+      전체 재인코딩이 됩니다. 여러 편을 한 번에 변환하면 <strong>나머지 편은
+      한글 자막을 자동으로 골라</strong> 굽습니다.
+    </p>
     {{end}}
     <div class="actions">
       <button name="scope" value="file">이 파일만</button>

@@ -19,6 +19,7 @@ import (
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 	"nvt/ver2/internal/web"
 )
 
@@ -34,6 +35,7 @@ func main() {
 	liveRoot := filepath.Join(cfg.StateDir, "live")
 	// Anything half-written belongs to a process that is no longer running.
 	jobs.Sweep(cfg.OutputDir, liveRoot)
+	os.RemoveAll(filepath.Join(cfg.StateDir, "subs"))
 
 	mapper, err := outpath.NewMapper(cfg.SourceDir, cfg.OutputDir, cfg.OutputRel)
 	if err != nil {
@@ -44,10 +46,21 @@ func main() {
 	prober := mediainfo.NewProber(cfg.FFprobeBin, cfg.ProbeTimeout, 4, cfg.StateDir)
 	defer prober.Flush()
 
+	subFinder := subs.NewFinder(mapper, prober)
+	subResolver := &subs.Resolver{
+		Finder: subFinder,
+		Preparer: &subs.Preparer{
+			Mapper:  mapper,
+			FFmpeg:  cfg.FFmpegBin,
+			TempDir: filepath.Join(cfg.StateDir, "subs"),
+		},
+	}
+
 	queue := jobs.NewQueue(jobs.Deps{
 		Mapper: mapper,
 		Prober: prober,
 		Runner: ffmpeg.NewExec(cfg.FFmpegBin),
+		Subs:   subResolver,
 		Settings: ffmpeg.Settings{
 			Threads:       cfg.Threads,
 			Preset:        cfg.Preset,
@@ -61,7 +74,7 @@ func main() {
 		CheckpointAt: float64(cfg.CheckpointPercent) / 100,
 	})
 
-	srv, err := web.New(cfg, mapper, library.New(mapper), queue, prober)
+	srv, err := web.New(cfg, mapper, library.New(mapper), queue, prober, subFinder)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}

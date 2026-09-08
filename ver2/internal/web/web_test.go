@@ -19,6 +19,7 @@ import (
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 )
 
 type stubProber struct{ info mediainfo.Info }
@@ -134,7 +135,7 @@ func newEnv(t *testing.T, blocking bool, files ...string) *env {
 	}
 
 	cfg := &config.Config{OutputDir: out, SourceDir: src, StateDir: state}
-	s, err := New(cfg, m, library.New(m), q, prober)
+	s, err := New(cfg, m, library.New(m), q, prober, subs.NewFinder(m, prober))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,17 +373,36 @@ func TestWatchPageOffersThePlayerOnlyWhenReady(t *testing.T) {
 	}
 }
 
-// The picker has to show what is actually in the file — including that a
-// bitmap track can only be burned in.
+// The picker has to show what is actually in the file, and say plainly which
+// tracks cannot be burned in.
 func TestWatchListsSubtitleTracks(t *testing.T) {
 	e := newEnv(t, false, "a.mkv")
 	body := get(t, e.h, "/watch/a.mkv").Body.String()
 
-	if !strings.Contains(body, "embedded:2") || !strings.Contains(body, "ENG") {
+	if !strings.Contains(body, `value="embedded:2"`) || !strings.Contains(body, "ENG") {
 		t.Errorf("the English track is missing from the picker:\n%s", body)
 	}
 	if !strings.Contains(body, "그림 자막") {
 		t.Error("a bitmap track was not marked as such")
+	}
+	if !strings.Contains(body, "disabled") {
+		t.Error("a bitmap track was selectable even though it cannot be burned")
+	}
+}
+
+// A Korean sidecar is what this library is normally watched with, so it should
+// be the first thing in the list.
+func TestWatchPutsKoreanSubtitlesFirst(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv", "S/ep1.ko.smi", "S/ep1.eng.srt")
+	body := get(t, e.h, "/watch/S/ep1.mkv").Body.String()
+
+	ko := strings.Index(body, "ep1.ko.smi")
+	en := strings.Index(body, "ep1.eng.srt")
+	if ko < 0 || en < 0 {
+		t.Fatalf("sidecars missing from the picker:\n%s", body)
+	}
+	if ko > en {
+		t.Error("the Korean subtitle is not offered first")
 	}
 }
 

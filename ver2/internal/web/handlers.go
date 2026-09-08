@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 )
 
 // row is one line of a directory listing: the file plus whatever we know about
@@ -71,12 +73,7 @@ type watchData struct {
 	MediaURL  string
 	Job       *jobs.View
 	BatchID   string
-	Subs      []subOption
-}
-
-type subOption struct {
-	Value string
-	Label string
+	Subs      []subs.Track
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -102,50 +99,29 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		data.Job = &jv
 		data.BatchID = v.BatchID
 	}
-	data.Subs = s.subtitleOptions(r, rel)
+	data.Subs = s.subtitleTracks(r, rel)
 
 	s.render(w, "watch", rel.Base(), "browse", data)
 }
 
-// subtitleOptions lists what could be burned in. Embedded tracks come from the
-// probe; a Korean one is offered first because that is what this library is
-// usually watched with, and the file that prompted all this has none.
-func (s *Server) subtitleOptions(r *http.Request, rel outpath.Rel) []subOption {
-	fi, err := os.Stat(s.mapper.Source(rel))
+// subtitleTracks lists what could be burned into this file. The probe has to
+// have happened for embedded tracks to show up, and probing here would block
+// the page on a cold library — so it is kicked off and the picker fills in on
+// the next visit.
+func (s *Server) subtitleTracks(r *http.Request, rel outpath.Rel) []subs.Track {
+	src := s.mapper.Source(rel)
+	fi, err := os.Stat(src)
 	if err != nil {
 		return nil
 	}
-	info, ok := s.prober.Cached(s.mapper.Source(rel), fi)
-	if !ok {
-		// Probing here would block the page on a cold library. The picker
-		// fills in once the file has been looked at.
+	if _, ok := s.prober.Cached(src, fi); !ok {
 		go func() {
-			if _, err := s.prober.Probe(r.Context(), s.mapper.Source(rel), fi); err != nil {
+			if _, err := s.prober.Probe(context.WithoutCancel(r.Context()), src, fi); err != nil {
 				log.Printf("probe %s: %v", rel.String(), err)
 			}
 		}()
-		return nil
 	}
-
-	var out []subOption
-	for _, st := range info.Subtitles() {
-		label := fmt.Sprintf("#%d %s", st.Index, strings.ToUpper(nonEmpty(st.Lang, "und")))
-		if st.Title != "" {
-			label += " · " + st.Title
-		}
-		if st.Bitmap() {
-			label += " (그림 자막)"
-		}
-		out = append(out, subOption{Value: fmt.Sprintf("embedded:%d", st.Index), Label: label})
-	}
-	return out
-}
-
-func nonEmpty(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
+	return s.subs.Find(rel)
 }
 
 // handleConvert is the one action in the whole interface. It says which file
@@ -168,10 +144,20 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
 		scope = library.ScopeFile
 	}
 
-	opts := jobs.Options{Live: r.FormValue("live") != ""}
-	// Subtitle burning arrives in the next phase; the control is already here
-	// so the shape of the form does not change under the user later.
-	_ = r.FormValue("subs")
+	picked := r.FormValue("subs")
+	opts := jobs.Options{
+		Live:             r.FormValue("live") != "",
+		Subtitles:        picked != "",
+		PickedSubtitleID: picked,
+	}
+	if picked != "" {
+		// Carry the chosen language to the rest of the batch. Episodes that
+		// do not have it get no subtitles, rather than another language
+		// burned in for good.
+		if t, ok := subs.FindByID(s.subs.Find(rel), picked); ok {
+			opts.SubtitleLang = t.Language()
+		}
+	}
 
 	batch, err := s.queue.EnqueueDir(s.lib, rel, scope, opts)
 	switch {

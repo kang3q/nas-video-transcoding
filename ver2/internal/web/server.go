@@ -28,6 +28,7 @@ import (
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 )
 
 //go:embed templates/*.html
@@ -49,12 +50,13 @@ type Server struct {
 	lib    *library.Library
 	queue  *jobs.Queue
 	prober Prober
+	subs   *subs.Finder
 
 	pages map[string]*template.Template
 }
 
-func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Queue, p Prober) (*Server, error) {
-	s := &Server{cfg: cfg, mapper: m, lib: lib, queue: q, prober: p}
+func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Queue, p Prober, f *subs.Finder) (*Server, error) {
+	s := &Server{cfg: cfg, mapper: m, lib: lib, queue: q, prober: p, subs: f}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
