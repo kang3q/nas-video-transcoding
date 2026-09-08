@@ -1,0 +1,25 @@
+services:
+  nvt:
+    build: .
+    container_name: nvt
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # 원본 라이브러리. 읽기 전용. 본인 공유 폴더 경로로 수정하세요.
+      - /volume1/video:/media:ro
+      # 변환 결과물. 여유 공간이 있는 볼륨에 두세요.
+      - /volume1/docker/nvt/cache:/cache
+    environment:
+      TZ: Asia/Seoul
+      # 플레이어가 이미 재생할 수 있는 코덱 목록.
+      # 여기에 없는 코덱은 변환 대상이 됩니다.
+      # 실제로 무엇이 재생 실패하는지 파악한 뒤 조정하세요.
+      NVT_AUDIO_OK: "aac,mp3,mp2,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le,pcm_u8"
+      NVT_AUDIO_BITRATE: "384k"
+      # J1900급 CPU는 영상을 실시간으로 재인코딩하지 못합니다. 1로 두세요.
+      NVT_TRANSCODE_JOBS: "1"
+      NVT_CACHE_MAX_GB: "100"
+      # 선택적 basic auth.
+      # NVT_USER: infuse
+      # NVT_PASS: changeme
