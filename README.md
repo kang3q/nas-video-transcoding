@@ -54,18 +54,58 @@ Pro의 코덱 경계를 명시하지 않으며, 증상을 보면 어느 쪽인�
 영상 쪽이 원인으로 밝혀지면 목록에서 해당 코덱을 빼면 됩니다. 어느 쪽이든
 파이프라인은 동일합니다.
 
-## 실행
-
-```bash
-docker compose up -d --build
-```
-
-그다음 Infuse에서 **파일 추가 → WebDAV**, `http://<나스주소>:8080/`.
-
-먼저 `docker-compose.yml`을 수정하세요. 최소한 볼륨 경로 두 개는 바꿔야 합니다.
+## 배포
 
 `/dev/dri` 패스스루는 필요 없습니다. 일반적인 경로에서는 영상을 인코딩하지
 않으므로 하드웨어 가속이 무의미합니다.
+
+### 방법 1: 미리 빌드된 이미지 받기 (권장)
+
+`main`에 푸시하면 GitHub Actions가 `linux/amd64` 이미지를 빌드해
+`ghcr.io/kang3q/nas-video-transcoding:latest`로 발행합니다. NAS는 내려받기만
+하므로 **아무것도 컴파일하지 않습니다.**
+
+NAS에 소스는 필요 없고 compose 파일 하나면 됩니다.
+
+```bash
+mkdir -p /volume1/docker/nvt && cd /volume1/docker/nvt
+curl -sO https://raw.githubusercontent.com/kang3q/nas-video-transcoding/main/docker-compose.nas.yml
+mv docker-compose.nas.yml docker-compose.yml
+vi docker-compose.yml          # 볼륨 경로 두 줄 수정
+sudo docker compose up -d
+```
+
+업데이트:
+
+```bash
+sudo docker compose pull && sudo docker compose up -d
+```
+
+> 첫 발행 직후 ghcr.io 패키지는 비공개입니다. GitHub 저장소 → Packages →
+> 해당 패키지 → Package settings → Change visibility → Public으로 바꾸면
+> NAS에서 로그인 없이 받을 수 있습니다.
+
+### 방법 2: NAS에서 직접 빌드
+
+소스를 NAS로 옮긴 뒤:
+
+```bash
+sudo docker compose up -d --build
+```
+
+J1900에서 첫 빌드는 golang 이미지를 받아야 해서 3~10분 걸립니다. 소스를 옮기지
+않고 원격 저장소를 빌드 컨텍스트로 바로 쓸 수도 있습니다:
+
+```bash
+sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
+```
+
+### Infuse 연결
+
+**파일 추가 → WebDAV**, 주소는 `http://<나스IP>:8080/`.
+
+외부에서 접속할 예정이라면 `NVT_USER`/`NVT_PASS`를 반드시 설정하세요.
+기본값은 인증 없이 열려 있습니다.
 
 ## 설정
 

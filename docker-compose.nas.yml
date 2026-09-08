@@ -1,0 +1,32 @@
+# NAS 배포용. 이미지를 내려받기만 하므로 NAS 는 아무것도 컴파일하지 않습니다.
+#
+#   1. 이 파일 하나만 NAS 의 /volume1/docker/nvt/docker-compose.yml 로 복사
+#   2. 아래 볼륨 경로 두 줄을 실제 경로로 수정
+#   3. sudo docker compose up -d
+#
+# 업데이트는 sudo docker compose pull && sudo docker compose up -d
+
+services:
+  nvt:
+    image: ghcr.io/kang3q/nas-video-transcoding:latest
+    container_name: nvt
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # 원본 라이브러리. 읽기 전용. 본인 공유 폴더 경로로 수정하세요.
+      - /volume1/video:/media:ro
+      # 변환 결과물. 여유 공간이 있는 볼륨에 두세요.
+      - /volume1/docker/nvt/cache:/cache
+    environment:
+      TZ: Asia/Seoul
+      # 플레이어가 이미 재생할 수 있는 코덱 목록.
+      # 여기에 없는 코덱은 변환 대상이 됩니다.
+      NVT_AUDIO_OK: "aac,mp3,mp2,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le,pcm_u8"
+      NVT_AUDIO_BITRATE: "384k"
+      # J1900급 CPU는 영상을 실시간으로 재인코딩하지 못합니다. 1로 두세요.
+      NVT_TRANSCODE_JOBS: "1"
+      NVT_CACHE_MAX_GB: "100"
+      # 외부에서 접속한다면 반드시 설정하세요.
+      # NVT_USER: infuse
+      # NVT_PASS: changeme
