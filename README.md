@@ -68,12 +68,16 @@ Pro의 코덱 경계를 명시하지 않으며, 증상을 보면 어느 쪽인�
 NAS에 소스는 필요 없고 compose 파일 하나면 됩니다.
 
 ```bash
-mkdir -p /volume1/docker/nvt && cd /volume1/docker/nvt
+mkdir -p /volume1/docker/nvt/cache && cd /volume1/docker/nvt
 curl -sO https://raw.githubusercontent.com/kang3q/nas-video-transcoding/main/docker-compose.nas.yml
 mv docker-compose.nas.yml docker-compose.yml
 vi docker-compose.yml          # 볼륨 경로 두 줄 수정
 sudo docker compose up -d
 ```
+
+> Synology 의 Docker 는 바인드 마운트 경로를 자동으로 만들지 않습니다. 캐시
+> 폴더가 없으면 `Bind mount failed: ... does not exist` 로 컨테이너가 뜨지
+> 않으니, compose 의 경로를 바꿨다면 그 경로로 `mkdir -p` 를 먼저 하세요.
 
 업데이트:
 

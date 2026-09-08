@@ -6,8 +6,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # 원본 라이브러리. 읽기 전용. 본인 공유 폴더 경로로 수정하세요.
-      - /volume1/video:/media:ro
+      # 원본 라이브러리. 읽기 전용으로 마운트합니다.
+      - /volume1/downloads:/media:ro
       # 변환 결과물. 여유 공간이 있는 볼륨에 두세요.
       - /volume1/docker/nvt/cache:/cache
     environment:

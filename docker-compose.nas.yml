@@ -2,7 +2,9 @@
 #
 #   1. 이 파일 하나만 NAS 의 /volume1/docker/nvt/docker-compose.yml 로 복사
 #   2. 아래 볼륨 경로 두 줄을 실제 경로로 수정
-#   3. sudo docker compose up -d
+#   3. 캐시 폴더를 미리 만든다 (Synology 는 없는 경로를 자동 생성하지 않는다)
+#        sudo mkdir -p /volume1/docker/nvt/cache
+#   4. sudo docker compose up -d
 #
 # 업데이트는 sudo docker compose pull && sudo docker compose up -d
 
@@ -14,9 +16,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # 원본 라이브러리. 읽기 전용. 본인 공유 폴더 경로로 수정하세요.
-      - /volume1/video:/media:ro
+      # 원본 라이브러리. 읽기 전용으로 마운트합니다.
+      - /volume1/downloads:/media:ro
       # 변환 결과물. 여유 공간이 있는 볼륨에 두세요.
+      # 이 경로는 반드시 미리 존재해야 합니다. mkdir -p 를 먼저 실행하세요.
       - /volume1/docker/nvt/cache:/cache
     environment:
       TZ: Asia/Seoul
