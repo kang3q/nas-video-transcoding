@@ -16,12 +16,12 @@ services:
       # 여기에 없는 코덱은 변환 대상이 됩니다.
       # 실제로 무엇이 재생 실패하는지 파악한 뒤 조정하세요.
       NVT_AUDIO_OK: "aac,mp3,mp2,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le,pcm_u8"
-      NVT_AUDIO_BITRATE: "384k"
-      # J1900급 CPU는 영상을 실시간으로 재인코딩하지 못합니다. 1로 두세요.
-      NVT_TRANSCODE_JOBS: "1"
-      # 폴더를 열 때 미리 변환해둘 최대 개수. 플레이어가 라이브러리 전체를
-      # 훑으므로 이 상한이 없으면 결국 전부 변환하게 됩니다.
-      NVT_PREFETCH_MAX: "3"
+      # 저사양 NAS 에서는 손실 인코더의 심리음향 모델이 전체 시간을 지배합니다.
+      # J1900 실측(스테레오): AAC 4x, MP3 6x, FLAC 60x.
+      NVT_AUDIO_CODEC: "flac"
+      # 오디오 인코딩은 단일 스레드입니다. 재생 중인 파일과 다음 파일을
+      # 동시에 처리하려면 2 이상이어야 합니다.
+      NVT_TRANSCODE_JOBS: "2"
       NVT_CACHE_MAX_GB: "100"
       # 선택적 basic auth.
       # NVT_USER: infuse

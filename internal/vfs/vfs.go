@@ -379,9 +379,15 @@ func (f *FS) openReal(e entry) (*namedFile, error) {
 
 func (f *FS) openConverted(ctx context.Context, virt string, e entry) (webdav.File, error) {
 	key := f.key(e)
+	dir := path.Dir(virt)
 
-	// Whatever happens to this file, line up the one after it.
-	defer func() { go f.queueNext(context.WithoutCancel(ctx), virt, e) }()
+	// A new playback makes any guess queued for somewhere else stale.
+	f.tm.DropPendingOutside(dir)
+
+	// Line up the next file now rather than on the way out: with
+	// WaitForComplete the open below can block for as long as the conversion
+	// takes, and by then the viewer is already watching.
+	go f.queueNext(context.WithoutCancel(ctx), virt, e)
 
 	if f.cache.Complete(key) {
 		f.cache.Touch(key)
@@ -389,7 +395,7 @@ func (f *FS) openConverted(ctx context.Context, virt string, e entry) (webdav.Fi
 	}
 
 	// Playback outranks anything speculative and will preempt it.
-	job := f.tm.Start(key, e.realPath, path.Dir(virt), e.plan, transcode.Playback)
+	job := f.tm.Start(key, e.realPath, dir, e.plan, transcode.Playback)
 	if job == nil { // finished between the check and the start
 		f.cache.Touch(key)
 		return f.openCached(key, e)

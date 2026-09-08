@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,56 @@ func TestCompletedOutputIsNotRequeued(t *testing.T) {
 	}
 	if m.Start("done", "/media/done.avi", "/dir", audioPlan, Playback) != nil {
 		t.Error("a completed conversion was started again")
+	}
+}
+
+func argsFor(t *testing.T, codec, bitrate string, action probe.Action) []string {
+	t.Helper()
+	m := &Manager{cfg: &config.Config{
+		AudioCodec: codec, AudioBitrate: bitrate,
+		VideoCodec: "libx264", VideoPreset: "veryfast", VideoCRF: "23",
+	}}
+	return m.args(probe.Plan{Action: action}, "/in.avi", "/out.mkv", true)
+}
+
+func joined(a []string) string { return " " + strings.Join(a, " ") + " " }
+
+// A lossless target ignores a bitrate, and ffmpeg should not be handed one.
+func TestArgsOmitBitrateForLosslessAudio(t *testing.T) {
+	for _, codec := range []string{"flac", "alac", "pcm_s16le", "pcm_s24le"} {
+		t.Run(codec, func(t *testing.T) {
+			got := joined(argsFor(t, codec, "384k", probe.AudioOnly))
+			if strings.Contains(got, " -b:a ") {
+				t.Errorf("args carry a bitrate for lossless codec %s: %s", codec, got)
+			}
+			if !strings.Contains(got, " -c:a "+codec+" ") {
+				t.Errorf("codec %s missing from args: %s", codec, got)
+			}
+		})
+	}
+}
+
+func TestArgsKeepBitrateForLossyAudio(t *testing.T) {
+	got := joined(argsFor(t, "aac", "192k", probe.AudioOnly))
+	if !strings.Contains(got, " -b:a 192k ") {
+		t.Errorf("lossy codec lost its bitrate: %s", got)
+	}
+}
+
+// The audio-only plan must never re-encode video; that is the whole point of it.
+func TestArgsCopyVideoForAudioPlan(t *testing.T) {
+	got := joined(argsFor(t, "flac", "", probe.AudioOnly))
+	if !strings.Contains(got, " -c:v copy ") {
+		t.Errorf("audio plan is not copying video: %s", got)
+	}
+	if strings.Contains(got, "libx264") {
+		t.Errorf("audio plan is invoking a video encoder: %s", got)
+	}
+}
+
+func TestArgsEncodeVideoForVideoPlan(t *testing.T) {
+	got := joined(argsFor(t, "flac", "", probe.FullTranscode))
+	if !strings.Contains(got, " -c:v libx264 ") {
+		t.Errorf("video plan is not encoding video: %s", got)
 	}
 }

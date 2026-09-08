@@ -23,15 +23,34 @@ Infuse는 SMB, FTP, SFTP, NFS, WebDAV, DLNA를 지원합니다. 이 중 **평범
 | 플랜 | ffmpeg | 속도 |
 |---|---|---|
 | `passthrough` | 없음 | 즉시 |
-| `audio` | `-c:v copy -c:a aac` | 디스크 속도에 좌우, 2GB 영화 기준 대략 20~60초 |
+| `audio` | `-c:v copy -c:a flac` | 오디오 인코딩 속도에 좌우 (아래 참고) |
 | `video` | `-c:v libx264 …` | 저전력 CPU에서는 실시간에 한참 못 미침 |
 
 **중요한 것은 `audio` 플랜입니다.** 영상은 비트 단위로 그대로 복사되므로 화질
-열화가 없고 CPU도 거의 놀고 있습니다. 실제 병목은 NAS가 파일을 얼마나 빨리
-읽고 쓰느냐입니다.
+열화가 없습니다. 남는 비용은 오디오 인코딩 하나뿐입니다.
 
 `video` 플랜은 완결성을 위해 넣어 두었습니다. Celeron J1900에서는 재생 속도를
 따라가지 못하므로, 즉시 재생용이 아니라 야간 배치 작업으로 생각하셔야 합니다.
+
+### 왜 FLAC 인가
+
+`audio` 플랜의 비용은 사실상 전부 오디오 인코딩입니다. 그런데 손실 코덱(AAC,
+MP3)은 심리음향 모델을 돌리기 때문에 저전력 CPU 에서 놀랄 만큼 느립니다.
+
+Celeron J1900 에서 스테레오 오디오를 실측한 값입니다:
+
+| 코덱 | 속도 | 52분 에피소드 |
+|---|---|---|
+| AAC 384k | 4x | 13분 |
+| MP3 256k | 6x | 9분 |
+| **FLAC** | **60x** | **1분 미만** |
+
+같은 CPU 에서 AC3 디코딩은 71x, 영상 복사는 215x, 디스크 읽기는 191MB/s 였습니다.
+병목은 오직 인코더였습니다.
+
+FLAC 은 무손실이라 음질 손실도 없습니다. 대가는 용량입니다 — 스테레오 48kHz 기준
+대략 700~900kb/s 로, 52분 에피소드에 300MB 쯤 붙습니다. 용량이 급하면
+`NVT_AUDIO_CODEC=aac` 로 되돌리되 위의 시간을 감수해야 합니다.
 
 ### "재생할 수 없다"의 기준
 
@@ -85,6 +104,20 @@ sudo docker compose up -d
 sudo docker compose pull && sudo docker compose up -d
 ```
 
+`:latest` 이미지가 로컬에 남아 있으면 Docker 는 다시 받지 않습니다. Container
+Manager 에서 프로젝트를 지워도 이미지는 남으므로, 새 버전이 안 잡히면 위의
+`pull` 을 쓰거나 이미지를 직접 지우세요:
+
+```bash
+sudo docker compose down
+sudo docker rmi ghcr.io/kang3q/nas-video-transcoding:latest
+sudo docker compose up -d
+```
+
+새 이미지가 떴는지는 기동 로그의 `prefetch=... max=... video=...` 줄로
+확인할 수 있습니다. 특정 버전에 고정하려면 `:latest` 대신 커밋 태그를
+쓰세요 (예: `sha-bafa722`).
+
 > 첫 발행 직후 ghcr.io 패키지는 비공개입니다. GitHub 저장소 → Packages →
 > 해당 패키지 → Package settings → Change visibility → Public으로 바꾸면
 > NAS에서 로그인 없이 받을 수 있습니다.
@@ -121,16 +154,16 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 | `NVT_USER` / `NVT_PASS` | — | 선택적 basic auth. 비워 두면 인증 없음 |
 | `NVT_VIDEO_OK` | 위 참조 | 변환이 필요 없는 영상 코덱 |
 | `NVT_AUDIO_OK` | 위 참조 | 변환이 필요 없는 오디오 코덱 |
-| `NVT_AUDIO_CODEC` | `aac` | 교체할 오디오 코덱 |
-| `NVT_AUDIO_BITRATE` | `384k` | 교체할 오디오 비트레이트 |
+| `NVT_AUDIO_CODEC` | `flac` | 교체할 오디오 코덱 |
+| `NVT_AUDIO_BITRATE` | `384k` | 오디오 비트레이트 (무손실 코덱에서는 무시) |
 | `NVT_AUDIO_CHANNELS` | `0` | `0`은 원본 채널 유지, `2`는 스테레오 다운믹스 |
 | `NVT_VIDEO_CODEC` | `libx264` | `video` 플랜에서만 사용 |
 | `NVT_VIDEO_PRESET` | `veryfast` | |
 | `NVT_VIDEO_CRF` | `23` | |
 | `NVT_CACHE_MAX_GB` | `100` | LRU 제거 기준 |
-| `NVT_TRANSCODE_JOBS` | `1` | 동시 ffmpeg 작업 수 |
+| `NVT_TRANSCODE_JOBS` | `1` | 동시 ffmpeg 작업 수 (오디오 전용이면 2 이상 권장) |
 | `NVT_PROBE_WORKERS` | `6` | 동시 ffprobe 호출 수 |
-| `NVT_PREFETCH` | `true` | 폴더를 열 때 그 안의 파일 변환을 미리 시작 |
+| `NVT_PREFETCH` | `false` | 폴더를 열 때 그 안의 파일을 미리 변환 |
 | `NVT_PREFETCH_MAX` | `3` | 한 폴더에서 미리 변환할 최대 개수 |
 | `NVT_PREFETCH_VIDEO` | `false` | 영상 재인코딩까지 추측으로 시작할지 |
 | `NVT_WAIT_COMPLETE` | `true` | 변환이 끝날 때까지 GET을 대기 |
@@ -144,29 +177,30 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 
 1. 플레이어가 폴더에 `PROPFIND`를 보냅니다. 그 안의 모든 미디어 파일을
    검사하고(병렬 처리, 캐시됨), 변환이 필요한 것은 `.mkv`로 표시합니다.
-2. `NVT_PREFETCH=true`면 그 폴더의 변환이 곧바로 시작됩니다 — 단
-   `NVT_PREFETCH_MAX`개까지, 그리고 영상 재인코딩이 필요한 파일은 제외하고.
-3. 플레이어가 `GET`을 보냅니다. 이 작업은 **재생 우선순위**로 큐에 들어가
+   **탐색만으로는 아무것도 변환하지 않습니다.**
+2. 플레이어가 `GET`을 보냅니다. 이 작업은 **재생 우선순위**로 큐에 들어가
    추측성 작업을 앞지르며, 필요하면 실행 중인 프리페치를 중단시킵니다.
-4. 동시에 **같은 폴더의 다음 파일 하나**가 프리페치 큐에 예약됩니다. 다음 화를
-   이어 볼 확률이 높기 때문입니다.
-5. 변환이 끝나 있으면 평범한 정적 파일로 서빙됩니다 — 정확한
+3. 동시에 **같은 폴더의 다음 파일 하나**가 예약됩니다. 다음 화를 이어 볼
+   확률이 높기 때문입니다. 예약은 이 한 개뿐입니다.
+4. 변환이 끝나 있으면 평범한 정적 파일로 서빙됩니다 — 정확한
    `Content-Length`, 완전한 시크, 이어받기 모두 정상입니다.
-6. 아직 안 끝났으면 `NVT_WAIT_TIMEOUT_SEC`만큼 기다립니다.
-7. 그래도 안 끝나면 커지는 중인 파일을 점진적으로 스트리밍합니다.
+5. 아직 안 끝났으면 `NVT_WAIT_TIMEOUT_SEC`만큼 기다립니다.
+6. 그래도 안 끝나면 커지는 중인 파일을 점진적으로 스트리밍합니다.
 
-다른 폴더로 이동하면 아직 시작되지 않은 프리페치는 버려집니다. 플레이어는
-라이브러리를 만들려고 공유 폴더 전체를 훑기 때문에, 이 제동이 없으면 결국
-라이브러리 전부를 변환하게 됩니다.
+다른 폴더의 파일을 재생하면, 앞서 예약해둔 다음 파일은 버려집니다.
+
+`NVT_PREFETCH=true` 로 켜면 폴더를 열 때 그 안의 파일을 `NVT_PREFETCH_MAX`개까지
+미리 변환합니다. 기본값이 꺼짐인 이유는, 플레이어가 라이브러리를 만들려고 공유
+폴더 전체를 훑기 때문입니다 — 켜두면 결국 라이브러리 전부를 변환하게 됩니다.
 
 ### 알려진 한계
 
-**5번이 약점입니다.** 아직 쓰이는 중인 파일은 최종 크기를 알 수 없으므로
+**6번이 약점입니다.** 아직 쓰이는 중인 파일은 최종 크기를 알 수 없으므로
 `Content-Length`가 추정치이고, 아직 기록되지 않은 지점으로는 시크할 수 없습니다.
-처음부터 재생하는 것은 정상이며, 변환이 끝난 뒤의 모든 재생은 3번 경로를 탑니다.
+처음부터 재생하는 것은 정상이며, 변환이 끝난 뒤의 모든 재생은 4번 경로를 탑니다.
 
-프리페치 덕분에 실제로 5번에 걸리는 경우는 드뭅니다. 자주 겪는다면
-`NVT_WAIT_TIMEOUT_SEC`을 늘리거나, 라이브러리를 한 번 훑어서 미리 데워 두세요.
+FLAC 기준으로 인코딩이 재생보다 수십 배 빠르므로, 점진적 스트리밍으로 넘어가도
+재생이 변환을 따라잡지 못합니다. 이미 변환된 구간 안에서는 시크도 됩니다.
 
 ## 상태 확인
 

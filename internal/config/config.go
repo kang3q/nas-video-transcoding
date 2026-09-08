@@ -43,8 +43,10 @@ type Config struct {
 	ProbeWorkers  int
 	TranscodeJobs int
 
-	// PrefetchOnList starts conversions as soon as a directory is browsed,
-	// so playback usually starts against a finished file.
+	// PrefetchOnList converts a whole directory when it is browsed. Off by
+	// default: players walk the entire share to build a library, so this
+	// eventually converts everything. The next-file speculation that follows
+	// playback covers the case that actually matters.
 	PrefetchOnList bool
 	// PrefetchMax caps how many files one directory may speculatively queue.
 	// Players walk the whole share to build a library, so an uncapped
@@ -80,7 +82,12 @@ func Load() *Config {
 		AudioOK: envList("NVT_AUDIO_OK",
 			"aac,mp3,mp2,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le,pcm_u8"),
 
-		AudioCodec:    env("NVT_AUDIO_CODEC", "aac"),
+		// FLAC by default: on a low-power NAS the psychoacoustic model in a
+		// lossy encoder dominates everything else. Measured on a Celeron
+		// J1900, stereo encoding ran at 4x realtime with AAC and 6x with MP3,
+		// against 60x with FLAC. It is also lossless, so re-encoding the audio
+		// costs no quality.
+		AudioCodec:    env("NVT_AUDIO_CODEC", "flac"),
 		AudioBitrate:  env("NVT_AUDIO_BITRATE", "384k"),
 		AudioChannels: envInt("NVT_AUDIO_CHANNELS", 0),
 
@@ -92,7 +99,7 @@ func Load() *Config {
 		ProbeWorkers:  envInt("NVT_PROBE_WORKERS", 6),
 		TranscodeJobs: envInt("NVT_TRANSCODE_JOBS", 1),
 
-		PrefetchOnList:  envBool("NVT_PREFETCH", true),
+		PrefetchOnList:  envBool("NVT_PREFETCH", false),
 		PrefetchMax:     envInt("NVT_PREFETCH_MAX", 3),
 		PrefetchVideo:   envBool("NVT_PREFETCH_VIDEO", false),
 		WaitForComplete: envBool("NVT_WAIT_COMPLETE", true),

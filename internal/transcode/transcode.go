@@ -14,6 +14,7 @@ import (
 	"log"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -429,7 +430,10 @@ func (m *Manager) args(pl probe.Plan, src, dst string, withSubs bool) []string {
 		a = append(a, "-c:v", "copy")
 	}
 
-	a = append(a, "-c:a", m.cfg.AudioCodec, "-b:a", m.cfg.AudioBitrate)
+	a = append(a, "-c:a", m.cfg.AudioCodec)
+	if !losslessAudio(m.cfg.AudioCodec) {
+		a = append(a, "-b:a", m.cfg.AudioBitrate)
+	}
 	if m.cfg.AudioChannels > 0 {
 		a = append(a, "-ac", strconv.Itoa(m.cfg.AudioChannels))
 	}
@@ -438,6 +442,16 @@ func (m *Manager) args(pl probe.Plan, src, dst string, withSubs bool) []string {
 	}
 
 	return append(a, "-f", "matroska", dst)
+}
+
+// losslessAudio reports whether a target codec ignores a bitrate setting.
+// Passing -b:a to one is at best meaningless and at worst an error.
+func losslessAudio(codec string) bool {
+	switch codec {
+	case "flac", "alac", "copy", "wavpack", "truehd":
+		return true
+	}
+	return strings.HasPrefix(codec, "pcm_")
 }
 
 func tail(s string, n int) string {
