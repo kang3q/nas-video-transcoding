@@ -21,10 +21,10 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"nvt/internal/cache"
-	"nvt/internal/config"
-	"nvt/internal/probe"
-	"nvt/internal/transcode"
+	"nvt/ver1/internal/cache"
+	"nvt/ver1/internal/config"
+	"nvt/ver1/internal/probe"
+	"nvt/ver1/internal/transcode"
 )
 
 var errReadOnly = errors.New("nvt: read-only filesystem")

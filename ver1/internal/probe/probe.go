@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"nvt/internal/config"
+	"nvt/ver1/internal/config"
 )
 
 type Action string

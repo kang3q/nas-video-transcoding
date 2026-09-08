@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"nvt/internal/cache"
-	"nvt/internal/config"
-	"nvt/internal/probe"
+	"nvt/ver1/internal/cache"
+	"nvt/ver1/internal/config"
+	"nvt/ver1/internal/probe"
 )
 
 // fakeFFmpeg writes a script that stays busy long enough to be caught in the

@@ -3,7 +3,7 @@ package vfs
 import (
 	"testing"
 
-	"nvt/internal/probe"
+	"nvt/ver1/internal/probe"
 )
 
 func file(name string, a probe.Action) entry {

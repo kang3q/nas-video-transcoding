@@ -3,7 +3,7 @@ package probe
 import (
 	"testing"
 
-	"nvt/internal/config"
+	"nvt/ver1/internal/config"
 )
 
 func testCfg() *config.Config {

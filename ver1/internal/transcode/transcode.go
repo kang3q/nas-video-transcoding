@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"nvt/internal/cache"
-	"nvt/internal/config"
-	"nvt/internal/probe"
+	"nvt/ver1/internal/cache"
+	"nvt/ver1/internal/config"
+	"nvt/ver1/internal/probe"
 )
 
 // ErrDropped is reported to anyone waiting on a queued job that was discarded
