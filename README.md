@@ -164,6 +164,8 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 | `NVT_TRANSCODE_JOBS` | `1` | 동시 ffmpeg 작업 수 (오디오 전용이면 2 이상 권장) |
 | `NVT_PROBE_WORKERS` | `6` | 동시 ffprobe 호출 수 |
 | `NVT_LOG_REQUESTS` | `true` | GET·HEAD 요청과 Range 헤더를 로그에 남김 |
+| `NVT_SCAN_WINDOW_SEC` | `10` | 훑기 판정 시간창 |
+| `NVT_SCAN_FILES` | `2` | 이 개수를 넘는 파일이 시간창 안에 요청되면 훑기로 판정 (`0`이면 판정 안 함) |
 | `NVT_PREFETCH` | `false` | 폴더를 열 때 그 안의 파일을 미리 변환 |
 | `NVT_PREFETCH_MAX` | `3` | 한 폴더에서 미리 변환할 최대 개수 |
 | `NVT_PREFETCH_VIDEO` | `false` | 영상 재인코딩까지 추측으로 시작할지 |
@@ -195,6 +197,38 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 `NVT_PREFETCH=true` 로 켜면 폴더를 열 때 그 안의 파일을 `NVT_PREFETCH_MAX`개까지
 미리 변환합니다. 기본값이 꺼짐인 이유는, 플레이어가 라이브러리를 만들려고 공유
 폴더 전체를 훑기 때문입니다 — 켜두면 결국 라이브러리 전부를 변환하게 됩니다.
+
+### 썸네일을 만드는 중인지 보는 중인지
+
+플레이어는 폴더에 들어오면 라이브러리를 만들려고 파일을 하나씩 열어봅니다.
+컨테이너 끝의 인덱스를 읽고, 중간에서 프레임 하나를 뽑아 썸네일을 만듭니다.
+문제는 **그 첫 요청이 재생을 시작하는 요청과 완전히 같다**는 것입니다. Infuse
+로그로 확인한 실제 순서입니다:
+
+```
+훑기          재생
+GET x.mkv                      GET x.mkv                      ← 같음
+range=bytes=282787840-         range=bytes=282656768-         ← 같음 (끝의 인덱스)
+range=bytes=282722304-         range=bytes=282591232-         ← 같음
+range=bytes=133627904-         GET x.ass                      ← 여기서 갈림
+                               range=bytes=65536-
+```
+
+요청 하나만 봐서는 구분할 수 없으므로, **폭**으로 판정합니다. 훑기는 몇 초 안에
+폴더 전체를 건드리고, 시청은 파일 하나만 건드립니다. `NVT_SCAN_WINDOW_SEC` 안에
+서로 다른 파일이 `NVT_SCAN_FILES`개를 넘게 요청되면 훑기로 보고, **변환하지 않고
+원본을 그대로 내보냅니다.** 썸네일은 디코딩할 프레임 하나만 있으면 되므로 원본
+으로도 정상 생성됩니다.
+
+대가는 두 가지입니다.
+
+- 훑기 초반 몇 개는 판정 전이라 변환됩니다. 폴더 전체가 아니라 `NVT_SCAN_FILES`
+  개로 묶이므로 폭주하지는 않습니다.
+- 훑기 직후 시간창 안에 재생을 시작하면 그 재생이 훑기로 오인될 수 있습니다.
+  그때는 원본이 나가므로 원래의 코덱 문제가 그대로 드러납니다. 다시 재생하면
+  정상 변환됩니다.
+
+`NVT_SCAN_FILES=0` 으로 판정을 끄면 모든 요청이 변환을 유발합니다.
 
 ### 알려진 한계
 

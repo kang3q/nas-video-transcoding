@@ -80,6 +80,7 @@ func main() {
 		cfg.AudioCodec, cfg.AudioBitrate, cfg.TranscodeJobs, cfg.WaitForComplete)
 	log.Printf("prefetch=%v max=%d video=%v log_requests=%v",
 		cfg.PrefetchOnList, cfg.PrefetchMax, cfg.PrefetchVideo, cfg.LogRequests)
+	log.Printf("sweep detection: more than %d files in %s", cfg.ScanFiles, cfg.ScanWindow)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

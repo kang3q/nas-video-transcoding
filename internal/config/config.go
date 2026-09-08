@@ -65,6 +65,13 @@ type Config struct {
 
 	ProbeTimeout time.Duration
 
+	// ScanWindow and ScanFiles describe what a library sweep looks like: more
+	// than ScanFiles distinct files fetched within ScanWindow. A sweep is
+	// served from the source instead of converting, since a thumbnail only
+	// needs a frame it can decode. Set ScanFiles to 0 to always convert.
+	ScanWindow time.Duration
+	ScanFiles  int
+
 	// LogRequests records every GET and HEAD with its Range header. Players
 	// differ in how they probe a share before playing it, and the difference
 	// decides what a request is allowed to set running.
@@ -112,6 +119,8 @@ func Load() *Config {
 		WaitTimeout:     time.Duration(envInt("NVT_WAIT_TIMEOUT_SEC", 1800)) * time.Second,
 		ProbeTimeout:    time.Duration(envInt("NVT_PROBE_TIMEOUT_SEC", 20)) * time.Second,
 		LogRequests:     envBool("NVT_LOG_REQUESTS", true),
+		ScanWindow:      time.Duration(envInt("NVT_SCAN_WINDOW_SEC", 10)) * time.Second,
+		ScanFiles:       envInt("NVT_SCAN_FILES", 2),
 	}
 	if c.TranscodeJobs < 1 {
 		c.TranscodeJobs = 1

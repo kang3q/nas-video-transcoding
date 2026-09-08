@@ -80,12 +80,18 @@ type FS struct {
 	cache  *cache.Cache
 	tm     *transcode.Manager
 
+	scan *scanDetector
+
 	mu   sync.Mutex
 	dirs map[string]*dirSnapshot
 }
 
 func New(cfg *config.Config, p *probe.Prober, c *cache.Cache, tm *transcode.Manager) *FS {
-	return &FS{cfg: cfg, prober: p, cache: c, tm: tm, dirs: map[string]*dirSnapshot{}}
+	return &FS{
+		cfg: cfg, prober: p, cache: c, tm: tm,
+		scan: newScanDetector(cfg.ScanWindow, cfg.ScanFiles),
+		dirs: map[string]*dirSnapshot{},
+	}
 }
 
 // --- webdav.FileSystem (read-only) ---
@@ -138,7 +144,15 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMo
 		// here would open a file per entry, or worse, start converting one.
 		return &metaFile{fi: f.infoFor(e), complete: f.settled(e)}, nil
 	}
+	sweeping := f.scan.Touch(virt)
 	if !e.plan.NeedsWork() {
+		return f.openReal(e)
+	}
+	if sweeping && !f.cache.Complete(f.key(e)) {
+		// Nobody is watching this: the player is walking the directory to
+		// build thumbnails and read durations. Hand over the source, which is
+		// all a frame grab needs, rather than converting a file per icon.
+		log.Printf("sweep, serving source unconverted: %s", e.realPath)
 		return f.openReal(e)
 	}
 	return f.openConverted(ctx, virt, e)
