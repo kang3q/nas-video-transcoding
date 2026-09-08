@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -60,7 +61,7 @@ func main() {
 	mux.HandleFunc("/__nvt/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
-	mux.Handle("/", readOnly(dav))
+	mux.Handle("/", readOnly(withMethod(quiet(dav))))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -107,6 +108,60 @@ func readOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withMethod passes the request method down to the filesystem, which needs it
+// to distinguish a directory listing from an actual playback request.
+func withMethod(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(vfs.WithMethod(r.Context(), r.Method)))
+	})
+}
+
+// quiet suppresses the "superfluous response.WriteHeader" warning that
+// x/net/webdav provokes on every abandoned request: handlePropfind reports a
+// late write error by returning a status, but by then the multistatus body has
+// already gone out. Players walk away from PROPFINDs constantly while scanning
+// a library, so the warning is pure noise. The underlying error is still
+// reported through the handler's Logger.
+func quiet(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&quietWriter{ResponseWriter: w}, r)
+	})
+}
+
+type quietWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (q *quietWriter) WriteHeader(code int) {
+	if q.wrote {
+		return
+	}
+	q.wrote = true
+	q.ResponseWriter.WriteHeader(code)
+}
+
+func (q *quietWriter) Write(b []byte) (int, error) {
+	q.wrote = true
+	return q.ResponseWriter.Write(b)
+}
+
+// ReadFrom keeps the sendfile fast path that http.ServeContent relies on;
+// wrapping the writer would otherwise hide it.
+func (q *quietWriter) ReadFrom(r io.Reader) (int64, error) {
+	q.wrote = true
+	if rf, ok := q.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(q.ResponseWriter, r)
+}
+
+func (q *quietWriter) Flush() {
+	if f, ok := q.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func basicAuth(cfg *config.Config, next http.Handler) http.Handler {

@@ -28,6 +28,28 @@ import (
 
 var errReadOnly = errors.New("nvt: read-only filesystem")
 
+type methodKey struct{}
+
+// WithMethod records the HTTP method so the filesystem can tell a listing from
+// a playback request.
+//
+// This is not a convenience. x/net/webdav resolves properties by calling
+// OpenFile on every file it lists, so OpenFile alone says nothing about intent
+// — treating it as "the viewer pressed play" would start a conversion for
+// every file in every directory a player walks, and block the PROPFIND while
+// each one ran.
+func WithMethod(ctx context.Context, method string) context.Context {
+	return context.WithValue(ctx, methodKey{}, method)
+}
+
+func isPlayback(ctx context.Context) bool {
+	switch m, _ := ctx.Value(methodKey{}).(string); m {
+	case "GET", "HEAD":
+		return true
+	}
+	return false
+}
+
 // mediaExt lists containers worth probing. Anything else (subtitles, artwork,
 // .nfo) is passed through untouched so external subtitle files keep working.
 var mediaExt = map[string]bool{
@@ -109,6 +131,11 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMo
 	}
 	if e.isDir {
 		return f.openDir(ctx, virt)
+	}
+	if !isPlayback(ctx) {
+		// A listing only ever asks for Stat. Handing back real content here
+		// would open a file per entry, or worse, start converting one.
+		return &metaFile{fi: f.infoFor(e)}, nil
 	}
 	if !e.plan.NeedsWork() {
 		return f.openReal(e)

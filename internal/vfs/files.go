@@ -1,10 +1,14 @@
 package vfs
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -16,6 +20,42 @@ type info struct {
 	mode fs.FileMode
 	mod  time.Time
 	dir  bool
+}
+
+// ContentType satisfies webdav.ContentTyper, and that matters far more than
+// it looks. Without it, webdav resolves getcontenttype by *opening* the file —
+// one more open per listed entry, on top of the one props() already does.
+//
+// The table exists because Go's mime package has no built-in entry for the
+// container formats we serve, and a minimal container image carries no
+// /etc/mime.types to fall back on.
+func (i *info) ContentType(context.Context) (string, error) {
+	ext := strings.ToLower(filepath.Ext(i.name))
+	if ct, ok := contentTypes[ext]; ok {
+		return ct, nil
+	}
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct, nil
+	}
+	return "application/octet-stream", nil
+}
+
+var contentTypes = map[string]string{
+	".mkv": "video/x-matroska", ".mp4": "video/mp4", ".m4v": "video/x-m4v",
+	".avi": "video/x-msvideo", ".mov": "video/quicktime", ".webm": "video/webm",
+	".ts": "video/mp2t", ".m2ts": "video/mp2t", ".mts": "video/mp2t",
+	".mpg": "video/mpeg", ".mpeg": "video/mpeg", ".m2v": "video/mpeg",
+	".wmv": "video/x-ms-wmv", ".asf": "video/x-ms-asf", ".flv": "video/x-flv",
+	".vob": "video/dvd", ".3gp": "video/3gpp", ".rmvb": "application/vnd.rn-realmedia-vbr",
+
+	".srt": "application/x-subrip", ".ass": "text/x-ssa", ".ssa": "text/x-ssa",
+	".vtt": "text/vtt", ".sub": "text/plain", ".idx": "text/plain",
+
+	".mp3": "audio/mpeg", ".flac": "audio/flac", ".m4a": "audio/mp4",
+	".aac": "audio/aac", ".ogg": "audio/ogg", ".wav": "audio/wav",
+
+	".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+	".nfo": "text/plain",
 }
 
 func (i *info) Name() string       { return i.name }
@@ -33,6 +73,29 @@ type namedFile struct {
 
 func (n *namedFile) Stat() (fs.FileInfo, error) { return n.fi, nil }
 func (n *namedFile) Write([]byte) (int, error)  { return 0, errReadOnly }
+
+// metaFile answers property lookups without touching content. WebDAV opens
+// every file it lists; this is what it gets.
+type metaFile struct {
+	fi fs.FileInfo
+}
+
+func (m *metaFile) Close() error               { return nil }
+func (m *metaFile) Stat() (fs.FileInfo, error) { return m.fi, nil }
+func (m *metaFile) Write([]byte) (int, error)  { return 0, errReadOnly }
+func (m *metaFile) Read([]byte) (int, error) {
+	return 0, errors.New("nvt: metadata handle carries no content")
+}
+func (m *metaFile) Readdir(int) ([]fs.FileInfo, error) {
+	return nil, errors.New("nvt: not a directory")
+}
+
+func (m *metaFile) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekEnd {
+		return m.fi.Size() + offset, nil
+	}
+	return offset, nil
+}
 
 // dirFile answers directory listings from a pre-resolved snapshot.
 type dirFile struct {
