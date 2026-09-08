@@ -1,28 +1,16 @@
+# 로컬 개발용 — 소스에서 v2 를 빌드합니다.
 services:
-  nvt:
+  nvt2:
     build: .
-    container_name: nvt
+    container_name: nvt2-dev
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
-      # 원본 라이브러리. 읽기 전용으로 마운트합니다.
       - /volume1/downloads:/media:ro
-      # 변환 결과물. 여유 공간이 있는 볼륨에 두세요.
-      - /volume1/docker/nvt/cache:/cache
+      - /volume1/downloads/_nvt:/output
+      - /volume1/docker/nvt2/state:/state
     environment:
       TZ: Asia/Seoul
-      # 플레이어가 이미 재생할 수 있는 코덱 목록.
-      # 여기에 없는 코덱은 변환 대상이 됩니다.
-      # 실제로 무엇이 재생 실패하는지 파악한 뒤 조정하세요.
-      NVT_AUDIO_OK: "aac,mp3,mp2,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le,pcm_u8"
-      # 저사양 NAS 에서는 손실 인코더의 심리음향 모델이 전체 시간을 지배합니다.
-      # J1900 실측(스테레오): AAC 4x, MP3 6x, FLAC 60x.
-      NVT_AUDIO_CODEC: "flac"
-      # 오디오 인코딩은 단일 스레드입니다. 재생 중인 파일과 다음 파일을
-      # 동시에 처리하려면 2 이상이어야 합니다.
-      NVT_TRANSCODE_JOBS: "2"
-      NVT_CACHE_MAX_GB: "100"
-      # 선택적 basic auth.
-      # NVT_USER: infuse
-      # NVT_PASS: changeme
+      NVT2_WORKERS: "1"
+      NVT2_THREADS: "3"

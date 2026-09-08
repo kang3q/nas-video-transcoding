@@ -1,0 +1,50 @@
+{{define "content"}}
+<nav class="crumbs">
+  {{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}<a href="/browse/{{$c.Path}}">{{$c.Name}}</a>{{end}}
+</nav>
+<h1>{{.Name}}</h1>
+
+{{if .Converted}}
+  <video controls preload="metadata" src="{{.MediaURL}}"></video>
+  <p class="meta"><a href="{{.MediaURL}}" download>파일 내려받기</a></p>
+{{else if .Job}}
+  <section class="job {{.Job.State}}" data-job="{{.Job.ID}}">
+    <p class="meta">아직 변환 중입니다. 완료되면 이 자리에서 재생할 수 있습니다.</p>
+    <div class="bar"><span style="width: {{pctwidth .Job.Percent}}"></span></div>
+    <div class="meta">
+      <span class="j-pct">{{pct .Job.Percent}}</span>
+      <span class="j-rate">{{rate .Job.Rate}}</span>
+      <span class="j-eta">남은 시간 {{dur .Job.ETASec}}</span>
+    </div>
+    {{if .BatchID}}
+    <form method="post" action="/batches/{{.BatchID}}/cancel" onsubmit="return confirm('남은 변환을 모두 중단할까요?')">
+      <input type="hidden" name="back" value="/watch/{{.Rel}}">
+      <button class="danger">이 묶음 전부 중단</button>
+    </form>
+    {{end}}
+  </section>
+{{else}}
+  <p class="empty">아직 변환하지 않은 파일입니다.</p>
+{{end}}
+
+<section class="convert">
+  <h2>변환</h2>
+  <form method="post" action="/convert">
+    <input type="hidden" name="rel" value="{{.Rel}}">
+    {{if .Subs}}
+    <label>자막 굽기
+      <select name="subs">
+        <option value="">굽지 않음</option>
+        {{range .Subs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+      </select>
+    </label>
+    <p class="hint">구운 자막은 끌 수 없고, 영상을 다시 그려야 하므로 시간이 더 걸립니다.</p>
+    {{end}}
+    <div class="actions">
+      <button name="scope" value="file">이 파일만</button>
+      <button name="scope" value="onwards">여기서부터 끝까지</button>
+      <button name="scope" value="folder">폴더 전체</button>
+    </div>
+  </form>
+</section>
+{{end}}

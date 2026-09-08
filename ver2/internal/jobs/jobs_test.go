@@ -275,7 +275,12 @@ func TestCancelAQueuedJob(t *testing.T) {
 		return writeOutput(spec)
 	}}
 	h := newHarness(t, runner, 1, "S/ep1.mkv", "S/ep2.mkv")
-	defer close(block)
+	// Release the running job and let it settle before the test returns, or
+	// its output write races the temporary directory being removed.
+	defer func() {
+		close(block)
+		waitFor(t, "the running job to settle", func() bool { return h.states()["ep1.mkv"].Terminal() })
+	}()
 
 	b, err := h.q.EnqueueDir(h.lib, h.rel(t, "S/ep1.mkv"), library.ScopeFolder, Options{})
 	if err != nil {

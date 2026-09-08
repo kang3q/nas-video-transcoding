@@ -1,0 +1,50 @@
+{{define "content"}}
+<h1>변환 작업</h1>
+
+{{with .Batch}}
+<section class="batch">
+  <div class="line">
+    <strong>{{if .Dir}}{{.Dir}}{{else}}라이브러리{{end}}</strong>
+    <span class="meta">완료 {{.Done}} · 대기 {{.Pending}}{{if .Failed}} · 실패 {{.Failed}}{{end}}</span>
+  </div>
+  {{if .Active}}
+  <form method="post" action="/batches/{{.ID}}/cancel" onsubmit="return confirm('남은 변환을 모두 중단할까요?')">
+    <input type="hidden" name="back" value="/jobs?batch={{.ID}}">
+    <button class="danger">이 묶음 전부 중단</button>
+  </form>
+  {{end}}
+</section>
+{{end}}
+
+{{if not .Jobs}}
+  <p class="empty">진행 중이거나 최근에 끝난 작업이 없습니다.</p>
+{{else}}
+<ul class="jobs" id="job-list">
+  {{range .Jobs}}
+  <li class="job {{.State}}" data-job="{{.ID}}">
+    <div class="line">
+      <span class="name">{{.Name}}</span>
+      <span class="state">{{.State}}</span>
+      {{if .Remux}}<span class="tag ok">컨테이너만 교체</span>{{end}}
+    </div>
+    <div class="bar"><span style="width: {{pctwidth .Percent}}"></span></div>
+    <div class="meta">
+      <span class="j-pct">{{pct .Percent}}</span>
+      <span class="j-rate">{{rate .Rate}}</span>
+      <span class="j-eta">남은 시간 {{dur .ETASec}}</span>
+      {{if .Duration}}<span>길이 {{dur .Duration}}</span>{{end}}
+    </div>
+    {{if .Error}}<pre class="error-box">{{.Error}}</pre>{{end}}
+    <div class="actions">
+      {{if eq .State "done"}}<a class="btn play" href="/watch/{{.Rel}}">재생</a>{{end}}
+      {{if or (eq .State "queued") (eq .State "running")}}
+      <form method="post" action="/jobs/{{.ID}}/cancel">
+        <button class="danger">중단</button>
+      </form>
+      {{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+{{end}}

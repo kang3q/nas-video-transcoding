@@ -1,0 +1,44 @@
+{{define "content"}}
+<nav class="crumbs">
+  {{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}<a href="/browse/{{$c.Path}}">{{$c.Name}}</a>{{end}}
+</nav>
+
+{{if not .Rows}}
+  <p class="empty">이 폴더는 비어 있습니다.</p>
+{{else}}
+<ul class="listing">
+  {{range .Rows}}
+  <li class="{{if .IsDir}}dir{{else if .IsVideo}}video{{else}}other{{end}}">
+    {{if .IsDir}}
+      <a class="name" href="/browse/{{.Rel}}">{{.Name}}</a>
+    {{else if .IsVideo}}
+      <div class="line">
+        <span class="name">{{.Name}}</span>
+        <span class="meta">{{size .Size}}</span>
+        {{if .Converted}}<span class="tag ok">변환됨</span>{{end}}
+        {{if .Job}}<span class="tag run" data-job="{{.Job.ID}}">{{pct .Job.Percent}}</span>{{end}}
+      </div>
+      <div class="actions">
+        {{if .Converted}}<a class="btn play" href="{{.WatchURL}}">재생</a>{{end}}
+        <form method="post" action="/convert">
+          <input type="hidden" name="rel" value="{{.Rel}}">
+          <button name="scope" value="file">이 파일만</button>
+          <button name="scope" value="onwards">여기서부터 끝까지</button>
+          <button name="scope" value="folder">폴더 전체</button>
+        </form>
+      </div>
+    {{else}}
+      <span class="name muted">{{.Name}}</span>
+    {{end}}
+  </li>
+  {{end}}
+</ul>
+{{end}}
+
+{{if .HasVideos}}
+<p class="hint">
+  어느 버튼을 눌러도 <strong>고른 파일이 가장 먼저</strong> 변환됩니다.
+  “폴더 전체”는 고른 지점부터 돌아 앞쪽 파일을 마지막에 처리합니다.
+</p>
+{{end}}
+{{end}}
