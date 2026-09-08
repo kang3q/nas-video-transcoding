@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -61,7 +63,7 @@ func main() {
 	mux.HandleFunc("/__nvt/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
-	mux.Handle("/", readOnly(withMethod(quiet(dav))))
+	mux.Handle("/", readOnly(withMethod(serveMedia(fsys, quiet(dav)))))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -109,6 +111,83 @@ func readOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// serveMedia answers GET and HEAD itself instead of letting webdav do it.
+//
+// webdav serves content through http.ServeContent, which has to know the total
+// size before it writes anything. For a conversion that is still running that
+// size is a guess, and a guess is not good enough: too low truncates playback
+// partway through, too high leaves the player waiting for bytes that never
+// come. Since FLAC output is larger than the source it replaces, the obvious
+// guess is always too low.
+//
+// So an unfinished conversion is streamed with no Content-Length at all. That
+// costs seeking until the job finishes, which is the honest trade; every
+// finished file still goes through ServeContent and seeks normally.
+func serveMedia(fsys *vfs.FS, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		f, err := fsys.OpenFile(r.Context(), r.URL.Path, os.O_RDONLY, 0)
+		if err != nil {
+			next.ServeHTTP(w, r) // let webdav decide the status
+			return
+		}
+		defer f.Close()
+
+		fi, err := f.Stat()
+		if err != nil || fi.IsDir() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if inc, ok := f.(vfs.Incomplete); ok && inc.Incomplete() {
+			streamUnsized(w, r, fi, f)
+			return
+		}
+		http.ServeContent(w, r, path.Base(r.URL.Path), fi.ModTime(), f)
+	})
+}
+
+// streamUnsized sends a file of unknown length, flushing as it goes so the
+// player starts on the first chunk rather than on a full buffer.
+func streamUnsized(w http.ResponseWriter, r *http.Request, fi fs.FileInfo, src io.Reader) {
+	if ct, ok := fi.(webdav.ContentTyper); ok {
+		if t, err := ct.ContentType(r.Context()); err == nil {
+			w.Header().Set("Content-Type", t)
+		}
+	}
+	// Range requests cannot be honoured without a known size; say so rather
+	// than answering one wrongly.
+	w.Header().Set("Accept-Ranges", "none")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+
+	flush, _ := w.(http.Flusher)
+	buf := make([]byte, 128<<10)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return // client went away
+			}
+			if flush != nil {
+				flush.Flush()
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				log.Printf("stream %s: %v", r.URL.Path, err)
+			}
+			return
+		}
+	}
 }
 
 // withMethod passes the request method down to the filesystem, which needs it

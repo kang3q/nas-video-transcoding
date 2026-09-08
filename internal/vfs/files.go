@@ -130,10 +130,18 @@ func (d *dirFile) Readdir(count int) ([]fs.FileInfo, error) {
 	return out, nil
 }
 
+// Incomplete marks a file whose content is still being produced. Its final
+// size is unknown, so it must not be served with a Content-Length: guessing
+// low truncates playback, guessing high hangs the client waiting for bytes
+// that never arrive.
+type Incomplete interface {
+	Incomplete() bool
+}
+
 // growingFile streams a conversion that is still being written. Reads block at
 // the write frontier instead of reporting EOF, which works because ffmpeg runs
-// far faster than playback. Its reported size is an estimate, so this path is
-// a fallback: the normal path waits for the job and serves a finished file.
+// far faster than playback. This is the fallback path: the normal one waits
+// for the job and serves a finished file, which seeks properly.
 type growingFile struct {
 	f   *os.File
 	job interface {
@@ -197,6 +205,7 @@ func (g *growingFile) Seek(offset int64, whence int) (int64, error) {
 	return pos, nil
 }
 
+func (g *growingFile) Incomplete() bool           { return !g.job.Finished() }
 func (g *growingFile) Close() error               { return g.f.Close() }
 func (g *growingFile) Write([]byte) (int, error)  { return 0, errReadOnly }
 func (g *growingFile) Stat() (fs.FileInfo, error) { return g.fi, nil }

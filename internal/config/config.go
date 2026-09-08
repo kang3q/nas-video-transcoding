@@ -56,9 +56,10 @@ type Config struct {
 	// on a NAS CPU one wrong guess costs hours.
 	PrefetchVideo bool
 
-	// WaitForComplete blocks a GET until conversion finishes. This gives an
-	// exact Content-Length and full seeking. Falls back to progressive
-	// streaming if the wait times out.
+	// WaitForComplete blocks a GET until conversion finishes, which is what
+	// makes seeking work. The timeout is generous on purpose: falling back to
+	// progressive streaming costs the viewer their seek bar, so it should
+	// happen only when something has gone genuinely wrong.
 	WaitForComplete bool
 	WaitTimeout     time.Duration
 
@@ -103,7 +104,7 @@ func Load() *Config {
 		PrefetchMax:     envInt("NVT_PREFETCH_MAX", 3),
 		PrefetchVideo:   envBool("NVT_PREFETCH_VIDEO", false),
 		WaitForComplete: envBool("NVT_WAIT_COMPLETE", true),
-		WaitTimeout:     time.Duration(envInt("NVT_WAIT_TIMEOUT_SEC", 150)) * time.Second,
+		WaitTimeout:     time.Duration(envInt("NVT_WAIT_TIMEOUT_SEC", 1800)) * time.Second,
 		ProbeTimeout:    time.Duration(envInt("NVT_PROBE_TIMEOUT_SEC", 20)) * time.Second,
 	}
 	if c.TranscodeJobs < 1 {
