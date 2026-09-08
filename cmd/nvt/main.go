@@ -74,8 +74,9 @@ func main() {
 	log.Printf("media=%s cache=%s listen=%s", cfg.MediaDir, cfg.CacheDir, cfg.Listen)
 	log.Printf("playable video: %s", strings.Join(cfg.VideoOK, ","))
 	log.Printf("playable audio: %s", strings.Join(cfg.AudioOK, ","))
-	log.Printf("convert to: %s %s, jobs=%d, prefetch=%v, wait=%v",
-		cfg.AudioCodec, cfg.AudioBitrate, cfg.TranscodeJobs, cfg.PrefetchOnList, cfg.WaitForComplete)
+	log.Printf("convert to: %s %s, jobs=%d, wait=%v",
+		cfg.AudioCodec, cfg.AudioBitrate, cfg.TranscodeJobs, cfg.WaitForComplete)
+	log.Printf("prefetch=%v max=%d video=%v", cfg.PrefetchOnList, cfg.PrefetchMax, cfg.PrefetchVideo)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -183,25 +184,28 @@ func basicAuth(cfg *config.Config, next http.Handler) http.Handler {
 
 func statusHandler(c *cache.Cache, tm *transcode.Manager, cfg *config.Config) http.HandlerFunc {
 	type job struct {
-		Source  string `json:"source"`
-		Action  string `json:"action"`
-		Reason  string `json:"reason"`
-		Elapsed string `json:"elapsed"`
-		Bytes   int64  `json:"bytes_written"`
+		Source   string `json:"source"`
+		Action   string `json:"action"`
+		Reason   string `json:"reason"`
+		Priority string `json:"priority"`
+		State    string `json:"state"`
+		Elapsed  string `json:"elapsed,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobs := []job{}
-		for _, j := range tm.Active() {
-			if j.Finished() {
-				continue
+		for _, s := range tm.Active() {
+			j := job{
+				Source:   s.Src,
+				Action:   s.Action,
+				Reason:   s.Reason,
+				Priority: s.Priority,
+				State:    "queued",
 			}
-			jobs = append(jobs, job{
-				Source:  j.Src,
-				Action:  string(j.Plan.Action),
-				Reason:  j.Plan.Reason,
-				Elapsed: time.Since(j.Started).Round(time.Second).String(),
-				Bytes:   c.Size(j.Key),
-			})
+			if s.Running {
+				j.State = "running"
+				j.Elapsed = s.Elapsed.String()
+			}
+			jobs = append(jobs, j)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		enc := json.NewEncoder(w)

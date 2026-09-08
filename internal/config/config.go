@@ -46,6 +46,13 @@ type Config struct {
 	// PrefetchOnList starts conversions as soon as a directory is browsed,
 	// so playback usually starts against a finished file.
 	PrefetchOnList bool
+	// PrefetchMax caps how many files one directory may speculatively queue.
+	// Players walk the whole share to build a library, so an uncapped
+	// prefetch would eventually convert everything.
+	PrefetchMax int
+	// PrefetchVideo allows speculative video re-encoding. Off by default:
+	// on a NAS CPU one wrong guess costs hours.
+	PrefetchVideo bool
 
 	// WaitForComplete blocks a GET until conversion finishes. This gives an
 	// exact Content-Length and full seeking. Falls back to progressive
@@ -86,6 +93,8 @@ func Load() *Config {
 		TranscodeJobs: envInt("NVT_TRANSCODE_JOBS", 1),
 
 		PrefetchOnList:  envBool("NVT_PREFETCH", true),
+		PrefetchMax:     envInt("NVT_PREFETCH_MAX", 3),
+		PrefetchVideo:   envBool("NVT_PREFETCH_VIDEO", false),
 		WaitForComplete: envBool("NVT_WAIT_COMPLETE", true),
 		WaitTimeout:     time.Duration(envInt("NVT_WAIT_TIMEOUT_SEC", 150)) * time.Second,
 		ProbeTimeout:    time.Duration(envInt("NVT_PROBE_TIMEOUT_SEC", 20)) * time.Second,
@@ -95,6 +104,9 @@ func Load() *Config {
 	}
 	if c.ProbeWorkers < 1 {
 		c.ProbeWorkers = 1
+	}
+	if c.PrefetchMax < 0 {
+		c.PrefetchMax = 0
 	}
 	return c
 }

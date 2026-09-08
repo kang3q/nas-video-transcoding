@@ -131,6 +131,8 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 | `NVT_TRANSCODE_JOBS` | `1` | 동시 ffmpeg 작업 수 |
 | `NVT_PROBE_WORKERS` | `6` | 동시 ffprobe 호출 수 |
 | `NVT_PREFETCH` | `true` | 폴더를 열 때 그 안의 파일 변환을 미리 시작 |
+| `NVT_PREFETCH_MAX` | `3` | 한 폴더에서 미리 변환할 최대 개수 |
+| `NVT_PREFETCH_VIDEO` | `false` | 영상 재인코딩까지 추측으로 시작할지 |
 | `NVT_WAIT_COMPLETE` | `true` | 변환이 끝날 때까지 GET을 대기 |
 | `NVT_WAIT_TIMEOUT_SEC` | `150` | 초과 시 점진적 스트리밍으로 전환 |
 
@@ -140,14 +142,22 @@ sudo docker build -t nvt https://github.com/kang3q/nas-video-transcoding.git
 
 ## 재생이 실제로 이루어지는 과정
 
-1. Infuse가 폴더에 `PROPFIND`를 보냅니다. 그 안의 모든 미디어 파일을
+1. 플레이어가 폴더에 `PROPFIND`를 보냅니다. 그 안의 모든 미디어 파일을
    검사하고(병렬 처리, 캐시됨), 변환이 필요한 것은 `.mkv`로 표시합니다.
-2. `NVT_PREFETCH=true`면 해당 폴더의 변환이 곧바로 시작됩니다. 사용자가 아직
-   목록을 훑어보는 동안에 말이죠.
-3. Infuse가 `GET`을 보냅니다. 변환이 끝나 있으면 평범한 정적 파일로 서빙됩니다 —
-   정확한 `Content-Length`, 완전한 시크, 이어받기 모두 정상입니다.
-4. 아직 안 끝났으면 `NVT_WAIT_TIMEOUT_SEC`만큼 기다립니다.
-5. 그래도 안 끝나면 커지는 중인 파일을 점진적으로 스트리밍합니다.
+2. `NVT_PREFETCH=true`면 그 폴더의 변환이 곧바로 시작됩니다 — 단
+   `NVT_PREFETCH_MAX`개까지, 그리고 영상 재인코딩이 필요한 파일은 제외하고.
+3. 플레이어가 `GET`을 보냅니다. 이 작업은 **재생 우선순위**로 큐에 들어가
+   추측성 작업을 앞지르며, 필요하면 실행 중인 프리페치를 중단시킵니다.
+4. 동시에 **같은 폴더의 다음 파일 하나**가 프리페치 큐에 예약됩니다. 다음 화를
+   이어 볼 확률이 높기 때문입니다.
+5. 변환이 끝나 있으면 평범한 정적 파일로 서빙됩니다 — 정확한
+   `Content-Length`, 완전한 시크, 이어받기 모두 정상입니다.
+6. 아직 안 끝났으면 `NVT_WAIT_TIMEOUT_SEC`만큼 기다립니다.
+7. 그래도 안 끝나면 커지는 중인 파일을 점진적으로 스트리밍합니다.
+
+다른 폴더로 이동하면 아직 시작되지 않은 프리페치는 버려집니다. 플레이어는
+라이브러리를 만들려고 공유 폴더 전체를 훑기 때문에, 이 제동이 없으면 결국
+라이브러리 전부를 변환하게 됩니다.
 
 ### 알려진 한계
 

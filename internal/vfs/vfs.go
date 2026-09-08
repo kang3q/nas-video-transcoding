@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -140,7 +141,7 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMo
 	if !e.plan.NeedsWork() {
 		return f.openReal(e)
 	}
-	return f.openConverted(ctx, e)
+	return f.openConverted(ctx, virt, e)
 }
 
 // --- listing ---
@@ -237,13 +238,21 @@ func (f *FS) list(ctx context.Context, virt string) ([]entry, error) {
 	wg.Wait()
 
 	assignNames(ents)
+	// Stable order matters: the next-file prefetch after playback walks this
+	// list, and probing finishes in nondeterministic order.
+	sort.Slice(ents, func(i, j int) bool {
+		if ents[i].isDir != ents[j].isDir {
+			return ents[i].isDir
+		}
+		return strings.ToLower(ents[i].virtName) < strings.ToLower(ents[j].virtName)
+	})
 
 	f.mu.Lock()
 	f.dirs[virt] = &dirSnapshot{at: time.Now(), entries: ents}
 	f.mu.Unlock()
 
 	if f.cfg.PrefetchOnList {
-		go f.prefetch(ents)
+		go f.prefetch(virt, ents)
 	}
 	return ents, nil
 }
@@ -276,16 +285,70 @@ func assignNames(ents []entry) {
 
 // prefetch warms the cache for a browsed directory so that pressing play
 // usually lands on a finished file.
-func (f *FS) prefetch(ents []entry) {
+//
+// It is deliberately timid. A player building its library walks the entire
+// share, so this runs for every directory that exists; converting all of it
+// would keep the NAS busy for hours on files nobody asked for.
+func (f *FS) prefetch(dir string, ents []entry) {
+	// Browsing elsewhere means earlier guesses are stale.
+	f.tm.DropPendingOutside(dir)
+
+	queued := 0
 	for _, e := range ents {
+		if queued >= f.cfg.PrefetchMax {
+			break
+		}
 		if e.isDir || !e.plan.NeedsWork() {
+			continue
+		}
+		// Video re-encoding is far too expensive to start on a guess.
+		if e.plan.Action == probe.FullTranscode && !f.cfg.PrefetchVideo {
 			continue
 		}
 		key := f.key(e)
 		if f.cache.Complete(key) {
 			continue
 		}
-		f.tm.Start(key, e.realPath, e.plan)
+		if f.tm.Start(key, e.realPath, dir, e.plan, transcode.Prefetch) != nil {
+			queued++
+		}
+	}
+}
+
+// queueNext speculates on exactly one file: the one after what is playing now.
+// That is the episode the viewer is most likely to reach, and it is a single
+// job rather than a directory's worth.
+func (f *FS) queueNext(ctx context.Context, virt string, cur entry) {
+	dir := path.Dir(virt)
+	ents, err := f.list(ctx, dir)
+	if err != nil {
+		return
+	}
+	at := -1
+	for i, e := range ents {
+		if e.virtName == cur.virtName {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return
+	}
+	for _, e := range ents[at+1:] {
+		if e.isDir || !e.plan.NeedsWork() {
+			continue
+		}
+		if e.plan.Action == probe.FullTranscode && !f.cfg.PrefetchVideo {
+			continue
+		}
+		key := f.key(e)
+		if f.cache.Complete(key) {
+			continue
+		}
+		if f.tm.Start(key, e.realPath, dir, e.plan, transcode.Prefetch) != nil {
+			log.Printf("queued next after playback: %s", e.realPath)
+		}
+		return
 	}
 }
 
@@ -314,15 +377,19 @@ func (f *FS) openReal(e entry) (*namedFile, error) {
 	return &namedFile{File: fh, fi: f.infoFor(e)}, nil
 }
 
-func (f *FS) openConverted(ctx context.Context, e entry) (webdav.File, error) {
+func (f *FS) openConverted(ctx context.Context, virt string, e entry) (webdav.File, error) {
 	key := f.key(e)
+
+	// Whatever happens to this file, line up the one after it.
+	defer func() { go f.queueNext(context.WithoutCancel(ctx), virt, e) }()
 
 	if f.cache.Complete(key) {
 		f.cache.Touch(key)
 		return f.openCached(key, e)
 	}
 
-	job := f.tm.Start(key, e.realPath, e.plan)
+	// Playback outranks anything speculative and will preempt it.
+	job := f.tm.Start(key, e.realPath, path.Dir(virt), e.plan, transcode.Playback)
 	if job == nil { // finished between the check and the start
 		f.cache.Touch(key)
 		return f.openCached(key, e)

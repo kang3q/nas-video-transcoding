@@ -29,6 +29,9 @@ services:
       NVT_AUDIO_BITRATE: "384k"
       # J1900급 CPU는 영상을 실시간으로 재인코딩하지 못합니다. 1로 두세요.
       NVT_TRANSCODE_JOBS: "1"
+      # 폴더를 열 때 미리 변환해둘 최대 개수. 플레이어가 라이브러리 전체를
+      # 훑으므로 이 상한이 없으면 결국 전부 변환하게 됩니다.
+      NVT_PREFETCH_MAX: "3"
       NVT_CACHE_MAX_GB: "100"
       # 외부에서 접속한다면 반드시 설정하세요.
       # NVT_USER: infuse
