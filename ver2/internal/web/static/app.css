@@ -43,6 +43,8 @@ li.dir .name::before { content: "📁 "; }
 li.other { opacity: .6; }
 .line { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
 .name { font-weight: 500; word-break: break-all; }
+a.name { color: var(--fg); text-decoration: none; }
+a.name:hover { color: var(--accent); text-decoration: underline; }
 .muted, .meta { color: var(--muted); font-size: .85rem; }
 .meta { display: flex; gap: .9rem; flex-wrap: wrap; margin-top: .35rem; }
 .empty, .hint { color: var(--muted); font-size: .9rem; }

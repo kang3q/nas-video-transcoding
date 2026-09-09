@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -383,5 +384,47 @@ func TestHumanDuration(t *testing.T) {
 		if got := human(sec); got != want {
 			t.Errorf("human(%v) = %q, want %q", sec, got, want)
 		}
+	}
+}
+
+// A link built by pasting a path into a string leaves the encoding to whoever
+// handles the message next. Telegram escaped it a second time, a space became
+// %2520, and the link opened a page for a file that does not exist.
+func TestWatchURLEncodesOnce(t *testing.T) {
+	w := NewWatcher(nil, nil, "http://nas.example:8080")
+
+	got := w.watchURL("애니/미래소년 코난 - 한국어 더빙/코난_cd10.avi")
+	if strings.Contains(got, " ") {
+		t.Errorf("spaces left raw in %q", got)
+	}
+	if strings.Contains(got, "%25") {
+		t.Errorf("double-encoded: %q", got)
+	}
+	if !strings.Contains(got, "%20") {
+		t.Errorf("spaces not encoded: %q", got)
+	}
+
+	// It has to survive a round trip back to the path we started from.
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("the link does not parse: %v", err)
+	}
+	const want = "/watch/애니/미래소년 코난 - 한국어 더빙/코난_cd10.avi"
+	if u.Path != want {
+		t.Errorf("decoded path = %q, want %q", u.Path, want)
+	}
+}
+
+func TestWatchURLEdges(t *testing.T) {
+	if got := NewWatcher(nil, nil, "").watchURL("a.mkv"); got != "" {
+		t.Errorf("no base url should mean no link, got %q", got)
+	}
+	if got := NewWatcher(nil, nil, "http://nas").watchURL(""); got != "" {
+		t.Errorf("no path should mean no link, got %q", got)
+	}
+	// A trailing slash on the base must not double up.
+	got := NewWatcher(nil, nil, "http://nas:8080/").watchURL("a.mkv")
+	if got != "http://nas:8080/watch/a.mkv" {
+		t.Errorf("got %q", got)
 	}
 }

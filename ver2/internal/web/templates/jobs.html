@@ -4,7 +4,7 @@
 {{with .Batch}}
 <section class="batch">
   <div class="line">
-    <strong>{{if .Dir}}{{.Dir}}{{else}}라이브러리{{end}}</strong>
+    <a href="/browse/{{.Dir}}"><strong>{{if .Dir}}{{.Dir}}{{else}}라이브러리{{end}}</strong></a>
     <span class="meta">완료 {{.Done}} · 대기 {{.Pending}}{{if .Failed}} · 실패 {{.Failed}}{{end}}</span>
   </div>
   {{if .Active}}
@@ -23,7 +23,7 @@
   {{range .Jobs}}
   <li class="job {{.State}}" data-job="{{.ID}}">
     <div class="line">
-      <span class="name">{{.Name}}</span>
+      <a class="name" href="/watch/{{.Rel}}">{{.Name}}</a>
       <span class="state">{{.State}}</span>
       {{if .Remux}}<span class="tag ok">컨테이너만 교체</span>{{end}}
     </div>
@@ -36,7 +36,11 @@
     </div>
     {{if .Error}}<pre class="error-box">{{.Error}}</pre>{{end}}
     <div class="actions">
-      {{if eq .State "done"}}<a class="btn play" href="/watch/{{.Rel}}">재생</a>{{end}}
+      {{if eq .State "done"}}
+        <a class="btn play" href="/watch/{{.Rel}}">재생</a>
+      {{else if eq .State "running"}}
+        <a class="btn play" href="/watch/{{.Rel}}">지금 보기</a>
+      {{end}}
       {{if or (eq .State "queued") (eq .State "running")}}
       <form method="post" action="/jobs/{{.ID}}/cancel">
         <button class="danger">중단</button>

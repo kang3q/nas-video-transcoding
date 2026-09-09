@@ -753,3 +753,29 @@ func TestBrowseTrustsTheProbeOverTheExtension(t *testing.T) {
 		t.Error("an HEVC file was labelled as playable as-is")
 	}
 }
+
+// The queue is a list of things you are waiting to watch, so every row has to
+// lead to the page that plays them — including while they are still encoding,
+// where that page carries the live player.
+func TestJobsListLinksToTheDetailPage(t *testing.T) {
+	e := newEnv(t, true, "S/ep1.mkv", "S/ep2.mkv")
+	post(t, e.h, "/convert", url.Values{"rel": {"S/ep1.mkv"}, "scope": {"folder"}})
+	waitFor(t, "the first job to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Running {
+				return true
+			}
+		}
+		return false
+	})
+
+	body := get(t, e.h, "/jobs").Body.String()
+	for _, want := range []string{`href="/watch/S/ep1.mkv"`, `href="/watch/S/ep2.mkv"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("jobs page has no link to %s:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, "지금 보기") {
+		t.Error("a running job offers no way to look at it")
+	}
+}

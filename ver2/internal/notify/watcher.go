@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -180,11 +181,23 @@ func (w *Watcher) onCallback(ctx context.Context, cb Callback) {
 	}
 }
 
+// watchURL builds the link that goes in a notification.
+//
+// It has to be assembled with net/url rather than concatenated. Library paths
+// hold spaces and Korean, and pasting a raw path into a URL leaves it to
+// whoever handles the message next to guess at the encoding — Telegram
+// escaped it a second time, turning a space into %2520, and the link then
+// pointed at a file that does not exist.
 func (w *Watcher) watchURL(rel string) string {
-	if w.baseURL == "" {
+	if w.baseURL == "" || rel == "" {
 		return ""
 	}
-	return w.baseURL + "/watch/" + rel
+	u, err := url.Parse(w.baseURL)
+	if err != nil {
+		return ""
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/watch/" + rel
+	return u.String()
 }
 
 func human(sec float64) string {
