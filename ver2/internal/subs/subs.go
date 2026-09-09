@@ -14,6 +14,7 @@
 package subs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -168,6 +169,9 @@ func (f *Finder) sidecars(rel outpath.Rel) []Track {
 				File: name, Codec: strings.TrimPrefix(strings.ToLower(path.Ext(name)), "."),
 			}
 			t.Lang = langFromName(stem, base)
+			if t.Lang == "" && f.sniffKorean(r) {
+				t.Lang = "kor"
+			}
 			t.Label = label(t)
 			out = append(out, t)
 		}
@@ -181,6 +185,61 @@ func (f *Finder) sidecars(rel outpath.Rel) []Track {
 		}
 	}
 	return out
+}
+
+// sniffKorean reads the subtitle and looks for Hangul.
+//
+// Naming conventions do not survive contact with a real library. The common
+// case here is a file named exactly like the video —
+// "DEATH NOTE 데스노트 02 (704x396 DivX).smi" beside the .avi of the same name —
+// which carries no language tag at all, because there is only one subtitle and
+// nothing to distinguish it from. Guessing from the name finds nothing, and
+// the viewer is then offered "굽지 않음" for a file whose subtitles are the
+// reason they are converting it.
+//
+// Opening the file settles it. Subtitles are a few tens of kilobytes, the
+// first chunk is enough, and Hangul is unmistakable — this cannot mistake an
+// English track for a Korean one the way a filename rule can.
+func (f *Finder) sniffKorean(r outpath.Rel) bool {
+	fh, err := f.mapper.Open(r)
+	if err != nil {
+		return false
+	}
+	defer fh.Close()
+
+	buf := make([]byte, 64<<10)
+	n, err := fh.Read(buf)
+	if n == 0 && err != nil {
+		return false
+	}
+	// Cut back to the last newline so the chunk ends on a whole character.
+	// A byte read half way through a CP949 pair decodes to nothing useful and
+	// makes the decoder report failure for a file that is perfectly fine.
+	// 0x0A cannot be the trailing byte of a CP949 pair or of a UTF-8
+	// sequence, so a newline is always a safe place to stop.
+	chunk := buf[:n]
+	if i := bytes.LastIndexByte(chunk, '\n'); i > 0 {
+		chunk = chunk[:i]
+	}
+	text, err := toUTF8(chunk)
+	if err != nil {
+		return false // neither UTF-8 nor CP949; nothing to read
+	}
+	return hasHangul(text)
+}
+
+// hasHangul reports whether the text holds Korean letters — precomposed
+// syllables or the Jamo they are built from.
+func hasHangul(b []byte) bool {
+	for _, r := range string(b) {
+		switch {
+		case r >= 0xAC00 && r <= 0xD7A3, // 가 … 힣
+			r >= 0x1100 && r <= 0x11FF, // conjoining Jamo
+			r >= 0x3130 && r <= 0x318F: // compatibility Jamo
+			return true
+		}
+	}
+	return false
 }
 
 // langFromName reads the tag some releases leave between the name and the

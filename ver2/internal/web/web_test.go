@@ -891,3 +891,25 @@ func TestBitmapSubtitleCannotBeChosen(t *testing.T) {
 		t.Errorf("the bitmap track was chosen by default: %s", tag)
 	}
 }
+
+// The reported case, end to end: a subtitle named exactly like the video, with
+// no language tag, is what most of this library looks like. The form has to
+// open on it rather than on "굽지 않음".
+func TestUntaggedKoreanSidecarIsTheDefault(t *testing.T) {
+	const video = "DEATH NOTE 데스노트 02 (704x396 DivX).avi"
+	const sub = "DEATH NOTE 데스노트 02 (704x396 DivX).smi"
+
+	e := newEnv(t, false, video)
+	if err := os.WriteFile(filepath.Join(e.src, sub),
+		[]byte("<SYNC Start=1000><P Class=KRCC>류크, 사과 줄까?\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, e.h, (&url.URL{Path: "/watch/" + video}).String()).Body.String()
+	if !checkedFor(t, body, "sidecar:"+sub) {
+		t.Errorf("the subtitle beside the video was not selected:\n%s", body)
+	}
+	if checkedFor(t, body, "") {
+		t.Error("burning was left off even though a Korean subtitle sits beside the file")
+	}
+}

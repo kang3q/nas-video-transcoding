@@ -305,3 +305,90 @@ func TestTrackLanguage(t *testing.T) {
 		t.Errorf("a Korean filename should report kor, got %q", got)
 	}
 }
+
+// The case from the library this was built for: one subtitle file named
+// exactly like the video, carrying no language tag because there is only one
+// of them and nothing to distinguish it from. Every naming rule finds nothing
+// here, so the file itself has to be read.
+func TestUntaggedSidecarIsReadRatherThanGuessed(t *testing.T) {
+	const video = "DEATH NOTE 데스노트 02 (704x396 DivX).avi"
+	const sub = "DEATH NOTE 데스노트 02 (704x396 DivX).smi"
+
+	f, m, src := newFinder(t, mediainfo.Info{}, video)
+
+	// Real .smi files from this era are CP949, not UTF-8.
+	body, _, err := transform.Bytes(korean.EUCKR.NewEncoder(),
+		[]byte("<SYNC Start=1000><P Class=KRCC>류크, 사과 줄까?\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, sub), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tracks := f.Find(rel(t, m, video))
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1: %+v", len(tracks), tracks)
+	}
+	if !tracks[0].Korean() {
+		t.Errorf("the Korean subtitle was not recognised: %+v", tracks[0])
+	}
+	if _, ok := PickLang(tracks, "kor"); !ok {
+		t.Error("PickLang could not find it, so the form would default to off")
+	}
+}
+
+// Reading the file must not turn an English subtitle into a Korean one — that
+// is the mistake a filename rule makes, and the reason for reading at all.
+func TestUntaggedEnglishSidecarStaysEnglish(t *testing.T) {
+	f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+	if err := os.WriteFile(filepath.Join(src, "Show.srt"),
+		[]byte("1\n00:00:01,000 --> 00:00:02,000\nI'll take a potato chip. And eat it!\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tracks := f.Find(rel(t, m, "Show.mkv"))
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1: %+v", len(tracks), tracks)
+	}
+	if tracks[0].Korean() {
+		t.Errorf("an English subtitle was taken for Korean: %+v", tracks[0])
+	}
+	if _, ok := PickLang(tracks, "kor"); ok {
+		t.Error("PickLang offered an English track as the Korean one")
+	}
+}
+
+// An explicit tag is the author saying what the file is, and outranks
+// whatever the first few kilobytes happen to contain — a Korean-subtitled
+// English learning track, say.
+func TestAnExplicitTagWins(t *testing.T) {
+	f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+	if err := os.WriteFile(filepath.Join(src, "Show.eng.srt"),
+		[]byte("1\n00:00:01,000 --> 00:00:02,000\n사과\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracks := f.Find(rel(t, m, "Show.mkv"))
+	if len(tracks) != 1 || tracks[0].Lang != "eng" {
+		t.Fatalf("tag was not kept: %+v", tracks)
+	}
+}
+
+func TestHasHangul(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"류크, 사과 줄까?", true},
+		{"ㄱㄴㄷ", true}, // compatibility Jamo
+		{"I'll take a potato chip", false},
+		{"リュークりんご食べる?", false}, // Japanese must not count
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := hasHangul([]byte(tc.in)); got != tc.want {
+			t.Errorf("hasHangul(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
