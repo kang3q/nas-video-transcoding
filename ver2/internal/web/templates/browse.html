@@ -25,7 +25,7 @@
         {{else if .PlaysAsIs}}
           <a class="btn play" href="/watch/{{.Rel}}">재생</a>
         {{else}}
-          <a class="btn" href="/watch/{{.Rel}}">변환하기</a>
+          <a class="btn" href="/watch/{{.Rel}}">변환 설정 →</a>
         {{end}}
       </div>
     {{else}}
@@ -38,7 +38,8 @@
 
 {{if .HasVideos}}
 <p class="hint">
-  파일을 누르면 안에 무엇이 들었는지 확인하고, 자막과 범위를 정해 변환합니다.
+  변환은 상세 화면에서 시작합니다 — 목록의 <strong>변환 설정</strong>은 거기로 가는
+  링크일 뿐이고, 눌러도 아직 아무것도 시작되지 않습니다.
   범위가 무엇이든 <strong>고른 파일이 가장 먼저</strong> 변환되므로 오늘 볼 것이
   가장 먼저 준비됩니다.
 </p>

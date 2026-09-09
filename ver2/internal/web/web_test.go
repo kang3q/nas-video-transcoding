@@ -193,7 +193,7 @@ func TestBrowseListsTheDirectory(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"ep2.mkv", "ep10.mkv", "notes.txt", "변환하기"} {
+	for _, want := range []string{"ep2.mkv", "ep10.mkv", "notes.txt", "변환 설정"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("browse page is missing %q", want)
 		}
@@ -209,8 +209,8 @@ func TestBrowseListsTheDirectory(t *testing.T) {
 	if strings.Contains(body, `name="scope"`) {
 		t.Errorf("the listing still starts conversions of its own:\n%s", body)
 	}
-	if strings.Count(body, "변환하기") != 2 {
-		t.Errorf("expected a link to the detail page for each video:\n%s", body)
+	if n := strings.Count(body, `class="btn" href="/watch/`); n != 2 {
+		t.Errorf("got %d links to the detail page, want one per video:\n%s", n, body)
 	}
 }
 
@@ -754,7 +754,7 @@ func TestBrowseWithNothingProbedTrustsTheExtension(t *testing.T) {
 	body := get(t, e.h, "/browse/").Body.String()
 
 	mp4 := section(t, body, "movie.mp4", "other.mkv")
-	if strings.Contains(mp4, "변환하기") {
+	if strings.Contains(mp4, "변환 설정") {
 		t.Errorf("an .mp4 was offered conversion rather than playback:\n%s", mp4)
 	}
 	if !strings.Contains(mp4, `href="/watch/movie.mp4"`) {
@@ -762,7 +762,7 @@ func TestBrowseWithNothingProbedTrustsTheExtension(t *testing.T) {
 	}
 
 	mkv := section(t, body, "other.mkv", "")
-	if !strings.Contains(mkv, "변환하기") {
+	if !strings.Contains(mkv, "변환 설정") {
 		t.Errorf("a .mkv offers no way to convert it:\n%s", mkv)
 	}
 }
@@ -792,7 +792,7 @@ func TestBrowseTrustsTheProbeOverTheExtension(t *testing.T) {
 	e := newEnv(t, false, "movie.mp4")
 	// The default stub reports HEVC, and Cached always answers.
 	body := get(t, e.h, "/browse/").Body.String()
-	if !strings.Contains(body, "변환하기") {
+	if !strings.Contains(body, "변환 설정") {
 		t.Errorf("a .mp4 known to hold HEVC was not offered conversion:\n%s", body)
 	}
 	if strings.Contains(body, "그대로 재생 가능") {
