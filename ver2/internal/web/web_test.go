@@ -1053,3 +1053,21 @@ func TestAConvertedFileIsNotHeldUpByProbing(t *testing.T) {
 		t.Errorf("the player is missing:\n%s", body)
 	}
 }
+
+// Discarding and reconverting are deliberately two steps: the reason to
+// discard is usually that the wrong thing was burned in, so the next screen
+// has to be the one where that is chosen — not a conversion already running.
+func TestDiscardDoesNotStartAnything(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	post(t, e.h, "/discard", url.Values{"rel": {"a.mkv"}})
+	if n := len(e.srv.queue.Snapshot()); n != 0 {
+		t.Errorf("discarding queued %d job(s) on its own", n)
+	}
+	if got := e.runner.converted(); len(got) != 0 {
+		t.Errorf("ffmpeg was run: %v", got)
+	}
+}
