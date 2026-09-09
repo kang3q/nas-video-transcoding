@@ -380,6 +380,8 @@ func (p *Preparer) Prepare(ctx context.Context, jobID string, rel outpath.Rel, i
 // extract pulls an embedded track out into its own file. Referring to the
 // video directly with subtitles=<src>:si=N would work, but only after escaping
 // a filename full of brackets and colons — this avoids the question.
+// extract pulls an embedded track out to a file of its own. It shares the
+// empty-output trap with convertSidecar, and the same guard.
 func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, arg string) (string, error) {
 	idx, err := strconv.Atoi(arg)
 	if err != nil {
@@ -397,6 +399,10 @@ func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, a
 	if b, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(out)
 		return "", fmt.Errorf("subs: extracting stream %d: %w: %s", idx, err, strings.TrimSpace(string(b)))
+	}
+	if err := checkHasDialogue(out, fmt.Sprintf("stream %d of %s", idx, rel.Base())); err != nil {
+		os.Remove(out)
+		return "", err
 	}
 	return out, nil
 }
@@ -434,7 +440,30 @@ func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string) (s
 		os.Remove(out)
 		return "", fmt.Errorf("subs: converting %s: %w: %s", rel.Base(), err, strings.TrimSpace(string(b)))
 	}
+	if err := checkHasDialogue(out, rel.Base()); err != nil {
+		os.Remove(out)
+		return "", err
+	}
 	return out, nil
+}
+
+// checkHasDialogue refuses a subtitle file with nothing in it to draw.
+//
+// ffmpeg exits zero after writing an ASS file that has a style block and no
+// events at all — a real outcome with SAMI, where the markup is often broken
+// enough that the demuxer reads the header and finds no cues. Burning that in
+// succeeds: it draws nothing, over an hour, and the only way to discover it is
+// to watch the result. Failing here costs a minute and says why.
+func checkHasDialogue(path, name string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(b, []byte("\nDialogue:")) {
+		return fmt.Errorf("subs: %s produced no subtitle lines — "+
+			"ffmpeg read the file but found nothing to show", name)
+	}
+	return nil
 }
 
 // toUTF8 makes a subtitle file readable. Korean .smi and .srt files are

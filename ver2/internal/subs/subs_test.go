@@ -423,3 +423,35 @@ func TestResolveSaysWhatItBurned(t *testing.T) {
 		t.Errorf("a conversion without subtitles said nothing: %q", out.String())
 	}
 }
+
+// ffmpeg exits zero after writing an ASS file with a style block and no
+// events, which SAMI produces often enough to matter: its markup is frequently
+// broken past the header. Burning that in succeeds and draws nothing, and an
+// hour later the only way to find out is to watch the result.
+func TestAnEmptySubtitleFileIsRefused(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := filepath.Join(dir, "empty.ass")
+	if err := os.WriteFile(empty, []byte(
+		"[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nStyle: Default\n\n[Events]\nFormat: Layer, Start, End, Text\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := checkHasDialogue(empty, "Show.smi")
+	if err == nil {
+		t.Fatal("a subtitle file with no lines was accepted")
+	}
+	if !strings.Contains(err.Error(), "Show.smi") {
+		t.Errorf("the error does not name the file: %v", err)
+	}
+
+	full := filepath.Join(dir, "full.ass")
+	if err := os.WriteFile(full, []byte(
+		"[Events]\nFormat: Layer, Start, End, Text\nDialogue: 0,0:00:01.00,0:00:03.00,류크, 사과 줄까?\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHasDialogue(full, "Show.smi"); err != nil {
+		t.Errorf("a subtitle file with lines was refused: %v", err)
+	}
+}
