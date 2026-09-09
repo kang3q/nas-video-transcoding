@@ -86,6 +86,16 @@ func coverArt(codec string) bool {
 	return false
 }
 
+// BrowserReady reports whether the source can be played as it is — H.264 with
+// AAC or MP3, already in an MP4. Converting one of these would spend an hour
+// to produce a copy of what is already there.
+func (i Info) BrowserReady() bool {
+	if !strings.Contains(i.Container, "mp4") {
+		return false
+	}
+	return i.RemuxOnly()
+}
+
 // RemuxOnly reports whether the file already holds what a browser and an
 // Apple TV both play, so only the container has to change.
 func (i Info) RemuxOnly() bool {

@@ -22,12 +22,22 @@ import (
 	"nvt/ver2/internal/subs"
 )
 
-type stubProber struct{ info mediainfo.Info }
+type stubProber struct {
+	info mediainfo.Info
+	// uncached makes Cached miss, so callers that only consult the cache take
+	// their fallback path — which is what browsing does.
+	uncached bool
+}
 
 func (s stubProber) Probe(context.Context, string, os.FileInfo) (mediainfo.Info, error) {
 	return s.info, nil
 }
-func (s stubProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) { return s.info, true }
+func (s stubProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) {
+	if s.uncached {
+		return mediainfo.Info{}, false
+	}
+	return s.info, true
+}
 
 type stubRunner struct {
 	mu    sync.Mutex
@@ -617,5 +627,129 @@ func TestVendoredHLSIsServed(t *testing.T) {
 	}
 	if rec.Body.Len() < 100000 {
 		t.Errorf("served %d bytes, that is not hls.js", rec.Body.Len())
+	}
+}
+
+// --- files that need nothing ---
+
+func readyEnv(t *testing.T, files ...string) *env {
+	t.Helper()
+	e := newEnv(t, false, files...)
+	e.srv.prober = stubProber{info: mediainfo.Info{
+		Duration:  100,
+		Container: "mov,mp4,m4a,3gp,3g2,mj2",
+		Streams: []mediainfo.Stream{
+			{Index: 0, Type: "video", Codec: "h264", Height: 1080},
+			{Index: 1, Type: "audio", Codec: "aac", Lang: "kor"},
+		},
+	}}
+	return e
+}
+
+// An .mp4 that already holds H.264 and AAC needs nothing done to it. Offering
+// to convert it is the confusing answer; playing it is the useful one.
+func TestWatchPlaysAnAlreadyPlayableSourceDirectly(t *testing.T) {
+	e := readyEnv(t, "movie.mp4")
+	body := get(t, e.h, "/watch/movie.mp4").Body.String()
+
+	if !strings.Contains(body, `src="/source/movie.mp4"`) {
+		t.Errorf("the source is not being played directly:\n%s", body)
+	}
+	if !strings.Contains(body, "변환할 것이 없습니다") {
+		t.Error("the page does not say why there is nothing to do")
+	}
+	if !strings.Contains(body, "H264 1080p") || !strings.Contains(body, "AAC KOR") {
+		t.Errorf("the codec summary is missing:\n%s", body)
+	}
+	// Converting is still possible — burning subtitles needs it — but it is
+	// no longer the thing being suggested.
+	if !strings.Contains(body, "그래도 변환하기") {
+		t.Error("converting should still be reachable, just not the headline")
+	}
+}
+
+func TestSourceServesTheOriginalWithRanges(t *testing.T) {
+	e := readyEnv(t, "movie.mp4")
+	if err := os.WriteFile(filepath.Join(e.src, "movie.mp4"), []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/source/movie.mp4", nil)
+	req.Header.Set("Range", "bytes=3-6")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206: seeking depends on it", rec.Code)
+	}
+	if got := rec.Body.String(); got != "3456" {
+		t.Errorf("body = %q", got)
+	}
+}
+
+func TestSourceRefusesEscapes(t *testing.T) {
+	e := readyEnv(t, "movie.mp4")
+	for _, p := range []string{
+		"/source/%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+		"/source/",
+	} {
+		if rec := get(t, e.h, p); rec.Code == http.StatusOK {
+			t.Errorf("GET %s returned 200", p)
+		}
+	}
+}
+
+// Browsing never probes — that is what made v1 take half a minute to show a
+// folder — so with nothing cached a .mp4 is taken at its word and a .mkv is
+// not.
+func TestBrowseWithNothingProbedTrustsTheExtension(t *testing.T) {
+	e := newEnv(t, false, "movie.mp4", "other.mkv")
+	e.srv.prober = stubProber{uncached: true}
+	body := get(t, e.h, "/browse/").Body.String()
+
+	mp4 := section(t, body, "movie.mp4", "other.mkv")
+	if strings.Contains(mp4, `name="scope"`) {
+		t.Errorf("an .mp4 was offered conversion buttons:\n%s", mp4)
+	}
+	if !strings.Contains(mp4, `href="/watch/movie.mp4"`) {
+		t.Errorf("no way to play the .mp4:\n%s", mp4)
+	}
+
+	mkv := section(t, body, "other.mkv", "")
+	if !strings.Contains(mkv, `name="scope"`) {
+		t.Errorf("a .mkv lost its conversion buttons:\n%s", mkv)
+	}
+}
+
+// section returns the slice of a page between two markers, so an assertion
+// about one row cannot accidentally read another.
+func section(t *testing.T, body, from, to string) string {
+	t.Helper()
+	i := strings.Index(body, from)
+	if i < 0 {
+		t.Fatalf("%q not found in page", from)
+	}
+	rest := body[i:]
+	if to == "" {
+		return rest
+	}
+	j := strings.Index(rest, to)
+	if j < 0 {
+		return rest
+	}
+	return rest[:j]
+}
+
+// Once probed, the truth wins over the extension: a .mp4 holding HEVC does
+// need converting after all.
+func TestBrowseTrustsTheProbeOverTheExtension(t *testing.T) {
+	e := newEnv(t, false, "movie.mp4")
+	// The default stub reports HEVC, and Cached always answers.
+	body := get(t, e.h, "/browse/").Body.String()
+	if !strings.Contains(body, `name="scope"`) {
+		t.Errorf("a .mp4 known to hold HEVC was not offered conversion:\n%s", body)
+	}
+	if strings.Contains(body, "그대로 재생 가능") {
+		t.Error("an HEVC file was labelled as playable as-is")
 	}
 }

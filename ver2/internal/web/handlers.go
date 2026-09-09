@@ -15,6 +15,7 @@ import (
 
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
+	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
 	"nvt/ver2/internal/subs"
 )
@@ -27,6 +28,11 @@ type row struct {
 	Converted bool
 	Job       *jobs.View
 	WatchURL  string
+	// PlaysAsIs suppresses the convert buttons for a file that does not need
+	// converting. Browsing never probes, so this is what is already known
+	// plus the reasonable assumption that a .mp4 is what it says it is; the
+	// detail page probes and corrects it either way.
+	PlaysAsIs bool
 }
 
 type browseData struct {
@@ -60,6 +66,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 				jv := v
 				item.Job = &jv
 			}
+			item.PlaysAsIs = s.looksPlayable(e.Rel)
 		}
 		data.Rows = append(data.Rows, item)
 	}
@@ -77,6 +84,13 @@ type watchData struct {
 	Subs      []subs.Track
 	LiveURL   string
 	LiveOn    bool
+
+	// PlaysAsIs means the source is already H.264 + AAC in an MP4. There is
+	// nothing to convert; it is simply played.
+	PlaysAsIs bool
+	SourceURL string
+	Probed    bool
+	Codecs    string
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -106,29 +120,104 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data.LiveOn = s.cfg.Live
-	data.Subs = s.subtitleTracks(r, rel)
+
+	if info, ok := s.inspect(r.Context(), rel); ok {
+		data.Probed = true
+		data.Codecs = describe(info)
+		if info.BrowserReady() {
+			data.PlaysAsIs = true
+			data.SourceURL = "/source/" + rel.String()
+		}
+	}
+	data.Subs = s.subs.Find(rel)
 
 	s.render(w, "watch", rel.Base(), "browse", data)
 }
 
-// subtitleTracks lists what could be burned into this file. The probe has to
-// have happened for embedded tracks to show up, and probing here would block
-// the page on a cold library — so it is kicked off and the picker fills in on
-// the next visit.
-func (s *Server) subtitleTracks(r *http.Request, rel outpath.Rel) []subs.Track {
+// looksPlayable answers, without running anything, whether a file probably
+// needs no work. A cached probe is the truth; failing that a .mp4 is taken at
+// its word, because offering to convert something that already plays is the
+// more confusing mistake.
+func (s *Server) looksPlayable(rel outpath.Rel) bool {
 	src := s.mapper.Source(rel)
 	fi, err := os.Stat(src)
 	if err != nil {
-		return nil
+		return false
 	}
-	if _, ok := s.prober.Cached(src, fi); !ok {
-		go func() {
-			if _, err := s.prober.Probe(context.WithoutCancel(r.Context()), src, fi); err != nil {
-				log.Printf("probe %s: %v", rel.String(), err)
-			}
-		}()
+	if info, ok := s.prober.Cached(src, fi); ok {
+		return info.BrowserReady()
 	}
-	return s.subs.Find(rel)
+	return rel.Ext() == ".mp4"
+}
+
+// inspect reads what is in the file. The detail page is where this belongs:
+// browsing has to stay free — probing every entry is what made v1 take half a
+// minute to show a folder — but once someone has opened one file, a moment of
+// ffprobe is what lets the page say anything useful about it.
+func (s *Server) inspect(ctx context.Context, rel outpath.Rel) (mediainfo.Info, bool) {
+	src := s.mapper.Source(rel)
+	fi, err := os.Stat(src)
+	if err != nil {
+		return mediainfo.Info{}, false
+	}
+	if info, ok := s.prober.Cached(src, fi); ok {
+		return info, true
+	}
+	info, err := s.prober.Probe(ctx, src, fi)
+	if err != nil {
+		log.Printf("probe %s: %v", rel.String(), err)
+		return mediainfo.Info{}, false
+	}
+	return info, true
+}
+
+// describe is the one-line summary on the detail page, so why a file does or
+// does not need converting is visible rather than implied.
+func describe(info mediainfo.Info) string {
+	var parts []string
+	if v, ok := info.Video(); ok {
+		d := strings.ToUpper(v.Codec)
+		if v.Height > 0 {
+			d += fmt.Sprintf(" %dp", v.Height)
+		}
+		parts = append(parts, d)
+	}
+	if a := info.Audio(); len(a) > 0 {
+		d := strings.ToUpper(a[0].Codec)
+		if a[0].Lang != "" {
+			d += " " + strings.ToUpper(a[0].Lang)
+		}
+		parts = append(parts, d)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// handleSource serves an original untouched, for the case where it already is
+// what a conversion would have produced. It goes through the mapper's root, so
+// a symlink inside the library cannot be used to read outside it, and
+// ServeContent gives Range requests — and therefore seeking — for free.
+func (s *Server) handleSource(w http.ResponseWriter, r *http.Request) {
+	rel, ok := s.parsePath(w, r, "/source/")
+	if !ok {
+		return
+	}
+	if rel.IsRoot() {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := s.mapper.Open(rel)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, rel.Base(), fi.ModTime(), f)
 }
 
 // handleLive serves the HLS rendition of a job that is still encoding.

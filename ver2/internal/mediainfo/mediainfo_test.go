@@ -175,3 +175,53 @@ func TestParseRejectsGarbage(t *testing.T) {
 		t.Error("garbage was accepted")
 	}
 }
+
+// A file that is already what we would produce should not be converted at all
+// — it should just be played.
+func TestBrowserReady(t *testing.T) {
+	cases := []struct {
+		name  string
+		json  string
+		ready bool
+	}{
+		{
+			"h264 and aac already in mp4",
+			`{"streams":[{"index":0,"codec_name":"h264","codec_type":"video"},
+			             {"index":1,"codec_name":"aac","codec_type":"audio"}],
+			  "format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"60"}}`,
+			true,
+		},
+		{
+			"the same streams in a mkv still need the container swapped",
+			`{"streams":[{"index":0,"codec_name":"h264","codec_type":"video"},
+			             {"index":1,"codec_name":"aac","codec_type":"audio"}],
+			  "format":{"format_name":"matroska,webm","duration":"60"}}`,
+			false,
+		},
+		{
+			"hevc in mp4 — the extension says converted, the codec does not",
+			`{"streams":[{"index":0,"codec_name":"hevc","codec_type":"video"},
+			             {"index":1,"codec_name":"aac","codec_type":"audio"}],
+			  "format":{"format_name":"mov,mp4,m4a","duration":"60"}}`,
+			false,
+		},
+		{
+			"h264 with ac3 in mp4 — video plays, audio does not",
+			`{"streams":[{"index":0,"codec_name":"h264","codec_type":"video"},
+			             {"index":1,"codec_name":"ac3","codec_type":"audio"}],
+			  "format":{"format_name":"mov,mp4,m4a","duration":"60"}}`,
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			info, err := parse([]byte(tc.json))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.BrowserReady(); got != tc.ready {
+				t.Errorf("BrowserReady = %v, want %v", got, tc.ready)
+			}
+		})
+	}
+}

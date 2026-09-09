@@ -4,9 +4,17 @@
 </nav>
 <h1>{{.Name}}</h1>
 
+{{if .Codecs}}<p class="meta">{{.Codecs}}</p>{{end}}
+
 {{if .Converted}}
   <video controls preload="metadata" src="{{.MediaURL}}"></video>
   <p class="meta"><a href="{{.MediaURL}}" download>파일 내려받기</a></p>
+{{else if .PlaysAsIs}}
+  <video controls preload="metadata" src="{{.SourceURL}}"></video>
+  <p class="hint">
+    이미 H.264 + AAC 로 된 MP4 라 변환할 것이 없습니다. 원본을 그대로 재생하고
+    있습니다.
+  </p>
 {{else if .Job}}
   <section class="job {{.Job.State}}" data-job="{{.Job.ID}}">
     {{if .LiveURL}}
@@ -43,7 +51,19 @@
 {{end}}
 
 <section class="convert">
-  <h2>변환</h2>
+  {{if .PlaysAsIs}}
+    <h2>그래도 변환하기</h2>
+    <p class="hint">
+      이 파일은 변환하지 않아도 재생됩니다. 자막을 화면에 굽고 싶을 때만
+      의미가 있고, 그러면 영상을 다시 그려야 하므로 시간이 걸립니다.
+    </p>
+  {{else if not .Probed}}
+    <h2>변환</h2>
+    <p class="hint">파일 내용을 아직 확인하지 못했습니다.</p>
+  {{else}}
+    <h2>변환</h2>
+    <p class="hint">이 조합은 브라우저에서 그대로 재생되지 않아 변환이 필요합니다.</p>
+  {{end}}
   <form method="post" action="/convert">
     <input type="hidden" name="rel" value="{{.Rel}}">
     {{if .LiveOn}}

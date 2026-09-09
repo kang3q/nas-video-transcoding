@@ -100,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /media/", http.StripPrefix("/media/",
 		http.FileServer(http.Dir(s.cfg.OutputDir))))
 	mux.HandleFunc("GET /live/", s.handleLive)
+	// A source that is already H.264 + AAC in an MP4 needs no conversion at
+	// all; it is played where it lies.
+	mux.HandleFunc("GET /source/", s.handleSource)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
