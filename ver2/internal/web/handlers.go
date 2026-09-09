@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"nvt/ver2/internal/airplay"
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -526,6 +527,107 @@ func displayName(rel outpath.Rel) string {
 		return "라이브러리"
 	}
 	return rel.Base()
+}
+
+// --- AirPlay diagnostics ---
+
+type clipView struct {
+	airplay.Variant
+	URL    string
+	Ready  bool
+	Codecs string
+	Job    *jobs.View
+}
+
+type airplayData struct {
+	Rel      string
+	Name     string
+	Crumbs   []crumb
+	Clips    []clipView
+	ClipSecs int
+	Any      bool // at least one clip exists or is being made
+}
+
+func (s *Server) handleAirPlay(w http.ResponseWriter, r *http.Request) {
+	rel, ok := s.parsePath(w, r, "/airplay/")
+	if !ok {
+		return
+	}
+	if rel.IsRoot() {
+		http.Redirect(w, r, "/browse/", http.StatusFound)
+		return
+	}
+
+	data := airplayData{
+		Rel: rel.String(), Name: rel.Base(),
+		Crumbs:   crumbs(rel.Dir().String()),
+		ClipSecs: airplay.ClipSecs,
+	}
+	dir := airplay.Dir(rel)
+	byVariant := map[string]jobs.View{}
+	for _, v := range s.queue.Snapshot() {
+		if v.Variant != "" && v.Rel == rel.String() {
+			byVariant[v.Variant] = v
+		}
+	}
+
+	for _, v := range airplay.Variants {
+		c := clipView{
+			Variant: v,
+			URL:     (&url.URL{Path: "/media/" + dir + "/" + v.File()}).String(),
+			Codecs:  describeVariant(v),
+		}
+		if _, err := os.Stat(filepath.Join(s.cfg.OutputDir, filepath.FromSlash(dir), v.File())); err == nil {
+			c.Ready = true
+			data.Any = true
+		}
+		if jv, ok := byVariant[v.Name]; ok {
+			j := jv
+			c.Job = &j
+			data.Any = true
+		}
+		data.Clips = append(data.Clips, c)
+	}
+
+	s.render(w, "airplay", "에어플레이 진단", "browse", data)
+}
+
+// describeVariant is the one-line summary under each clip's heading — the
+// settings themselves, so the page can be read without opening the source.
+func describeVariant(v airplay.Variant) string {
+	size := "원본 크기"
+	if v.MaxHeight > 0 {
+		size = fmt.Sprintf("%dp 이하", v.MaxHeight)
+	}
+	profile := v.Profile
+	if profile != "" {
+		profile = strings.ToUpper(profile[:1]) + profile[1:]
+	}
+	return fmt.Sprintf("H.264 %s@%s · %s · %s · AAC-LC %s 2ch 48kHz · faststart",
+		profile, v.Level, size, v.VideoBitrate, v.AudioBitrate)
+}
+
+func (s *Server) handleAirPlayMake(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.fail(w, http.StatusBadRequest, "요청을 읽을 수 없습니다")
+		return
+	}
+	rel, err := s.mapper.ParseRel(r.FormValue("rel"))
+	if err != nil || rel.IsRoot() {
+		s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
+		return
+	}
+	to := (&url.URL{Path: "/airplay/" + rel.String()}).String()
+
+	if _, err := s.queue.EnqueueAirPlayProbes(rel); err != nil {
+		if errors.Is(err, jobs.ErrNothingToDo) {
+			http.Redirect(w, r, to, http.StatusSeeOther)
+			return
+		}
+		s.fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 // handleDiscard removes a conversion so it can be made again — the subtitles

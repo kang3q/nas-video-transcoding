@@ -65,6 +65,10 @@
 
 {{/* When there is something to play, the page is for playing it and the form
      folds away. When there is not, it is the only thing on the page. */}}
+<p class="meta">
+  <a href="/airplay/{{.Rel}}">에어플레이로 재생이 안 되나요? →</a>
+</p>
+
 <details class="convert"{{if not (or .Converted .PlaysAsIs)}} open{{end}}>
   <summary>
     {{if .Converted}}다시 변환하기{{else if .PlaysAsIs}}그래도 변환하기{{else}}변환{{end}}

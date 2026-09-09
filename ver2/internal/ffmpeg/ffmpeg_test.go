@@ -403,3 +403,62 @@ func fakeFFmpeg(t *testing.T, script string) string {
 	}
 	return p
 }
+
+// A diagnostic clip has to be exactly what it claims: no subtitles drawn in,
+// no tee, no live rendition, and the index at the front. Every one of those is
+// a way for the test to fail for a reason that has nothing to do with what is
+// being tested.
+func TestProbeArgsAreDeliberatelyPlain(t *testing.T) {
+	line := argLine(Args(Spec{
+		Src: "/media/a.mkv", Dst: "/out/a-faststart.mp4.part",
+		VideoIndex: 0, AudioIndex: 1,
+		// These must all be ignored on the probe path.
+		BurnSubs: "/state/subs/x.ass", LiveDir: "/state/live/x", Remux: true,
+		Width: 3840, Height: 2160,
+		Probe: &ProbeOpts{
+			StartSec: 60, Secs: 60,
+			Profile: "main", Level: "3.1", MaxHeight: 720,
+			VideoBitrate: "1800k", AudioBitrate: "128k",
+		},
+	}, testSettings))
+
+	for _, want := range []string{
+		" -ss 60.00 ", " -t 60.00 ",
+		" -profile:v main ", " -level 3.1 ",
+		" -b:v 1800k ", " -b:a 128k ", " -ac 2 ", " -ar 48000 ",
+		` -vf scale=-2:'min(720,ih)' `,
+		" -movflags +faststart ", " -f mp4 ",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("missing %q in:\n%s", want, line)
+		}
+	}
+	for _, unwanted := range []string{"subtitles=", "-f tee", "hls", "-c copy"} {
+		if strings.Contains(line, unwanted) {
+			t.Errorf("probe carried %q, which it is not testing:\n%s", unwanted, line)
+		}
+	}
+
+	// -ss has to come before -i or ffmpeg decodes the whole file to reach it.
+	if strings.Index(line, " -ss ") > strings.Index(line, " -i ") {
+		t.Errorf("-ss is after -i, so seeking will decode from the start:\n%s", line)
+	}
+}
+
+// Left alone means left alone: a source already smaller than the cap must not
+// be scaled up, and no cap at all means no filter.
+func TestProbeScalesOnlyWhenAsked(t *testing.T) {
+	line := argLine(Args(Spec{
+		Src: "a.mkv", Dst: "b.mp4", VideoIndex: 0, AudioIndex: -1,
+		Probe: &ProbeOpts{
+			Secs: 60, Profile: "high", Level: "4.2",
+			VideoBitrate: "2600k", AudioBitrate: "320k",
+		},
+	}, testSettings))
+	if strings.Contains(line, "-vf") {
+		t.Errorf("a variant with no height cap still filtered:\n%s", line)
+	}
+	if strings.Contains(line, "-c:a") {
+		t.Errorf("a source with no audio was given an audio encoder:\n%s", line)
+	}
+}

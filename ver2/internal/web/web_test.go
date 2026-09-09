@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"nvt/ver2/internal/airplay"
 	"nvt/ver2/internal/config"
 	"nvt/ver2/internal/ffmpeg"
 	"nvt/ver2/internal/jobs"
@@ -72,6 +73,15 @@ type env struct {
 	runner *stubRunner
 	out    string
 	src    string
+}
+
+func (e *env) rel(t *testing.T, p string) outpath.Rel {
+	t.Helper()
+	r, err := e.srv.mapper.ParseRel(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 func newEnv(t *testing.T, blocking bool, files ...string) *env {
@@ -1069,5 +1079,90 @@ func TestDiscardDoesNotStartAnything(t *testing.T) {
 	}
 	if got := e.runner.converted(); len(got) != 0 {
 		t.Errorf("ffmpeg was run: %v", got)
+	}
+}
+
+// --- AirPlay diagnostics ---
+
+// AirPlay says nothing about why a file will not play. Four short clips that
+// differ in one property each turn that into something answerable, so the page
+// has to show all four at once, each with its own player.
+func TestAirPlayPageOffersEveryVariant(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+
+	body := get(t, e.h, "/airplay/a.mkv").Body.String()
+	for _, v := range airplay.Variants {
+		if !strings.Contains(body, v.Title) {
+			t.Errorf("%q is missing from the page:\n%s", v.Name, body)
+		}
+	}
+	if strings.Contains(body, "<video") {
+		t.Error("a player was offered for a clip that has not been made")
+	}
+
+	// Once the clips exist, each gets a player pointed at its own file.
+	dir := filepath.Join(e.out, filepath.FromSlash(airplay.Dir(e.rel(t, "a.mkv"))))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range airplay.Variants {
+		if err := os.WriteFile(filepath.Join(dir, v.File()), []byte("clip"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body = get(t, e.h, "/airplay/a.mkv").Body.String()
+	if n := strings.Count(body, "<video"); n != len(airplay.Variants) {
+		t.Errorf("got %d players, want %d:\n%s", n, len(airplay.Variants), body)
+	}
+	for _, v := range airplay.Variants {
+		if !strings.Contains(body, v.File()) {
+			t.Errorf("no player points at %s", v.File())
+		}
+	}
+}
+
+// The clips are ordinary jobs, so they queue behind a real conversion rather
+// than competing with it for the one encoder this hardware has.
+func TestAirPlayProbesGoThroughTheQueue(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+
+	rec := post(t, e.h, "/airplay", url.Values{"rel": {"a.mkv"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+
+	var names []string
+	for _, v := range e.srv.queue.Snapshot() {
+		if v.Variant != "" {
+			names = append(names, v.Variant)
+		}
+	}
+	if len(names) != len(airplay.Variants) {
+		t.Fatalf("queued %v, want one job per variant", names)
+	}
+
+	// The file's real conversion must still be reachable: the diagnostics
+	// write elsewhere and must not be mistaken for it.
+	if _, ok := e.srv.queue.ByRel(e.rel(t, "a.mkv")); ok {
+		t.Error("a diagnostic clip was taken for the file's own conversion")
+	}
+}
+
+// The clips are made to answer a question being asked now. Keeping them across
+// a restart would restart an experiment nobody is waiting on.
+func TestAirPlayProbesAreNotPersisted(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+	post(t, e.h, "/airplay", url.Values{"rel": {"a.mkv"}})
+
+	waitFor(t, "a probe to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.Variant != "" && v.State == jobs.Running {
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := os.Stat(filepath.Join(e.srv.cfg.StateDir, "queue.json")); err == nil {
+		t.Error("a diagnostic batch was written to the saved queue")
 	}
 }

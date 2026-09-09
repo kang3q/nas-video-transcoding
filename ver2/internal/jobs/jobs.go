@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"nvt/ver2/internal/airplay"
 	"nvt/ver2/internal/ffmpeg"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -79,6 +80,11 @@ type Job struct {
 	opts                    Options
 	preferredSub            string
 
+	// variant names the AirPlay diagnostic this job renders, empty for an
+	// ordinary conversion. The recipe is looked up when the job runs, because
+	// it depends on the source duration, which needs a probe to know.
+	variant string
+
 	mu        sync.Mutex
 	state     State
 	remux     bool
@@ -110,6 +116,8 @@ type View struct {
 	Elapsed  float64 `json:"elapsed_sec"`
 	Error    string  `json:"error,omitempty"`
 	Live     bool    `json:"live"`
+	// Variant is set only on AirPlay diagnostic clips, and names which one.
+	Variant string `json:"variant,omitempty"`
 	// ReadyInSec is how much longer to wait before playback can run to the
 	// end without overtaking the encoder. 0 means now, -1 means not yet
 	// knowable. Only meaningful while the job is running.
@@ -124,7 +132,7 @@ func (j *Job) View() View {
 		ID: j.ID, BatchID: j.BatchID, Name: j.Name, Rel: j.Rel.String(),
 		State: j.state, Remux: j.remux, Error: j.errText,
 		Duration: j.duration.Seconds(), Out: j.out.Seconds(),
-		FPS: j.fps, Live: j.opts.Live,
+		FPS: j.fps, Live: j.opts.Live, Variant: j.variant,
 		Percent: ffmpeg.Percent(j.out, j.duration, j.state == Done),
 		ETASec:  -1,
 	}
@@ -695,6 +703,25 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 		if err != nil {
 			return ffmpeg.Spec{}, noop, err
 		}
+	}
+
+	// A diagnostic clip is its own thing: no subtitles, no remux shortcut, no
+	// live rendition. Each of those is a way for the test to fail for a reason
+	// that has nothing to do with what it is testing.
+	if j.variant != "" {
+		v, ok := airplay.Find(j.variant)
+		if !ok {
+			return ffmpeg.Spec{}, noop, fmt.Errorf("airplay: unknown variant %q", j.variant)
+		}
+		probe := v.Opts(info.Duration)
+		// The bar should fill over the clip, not over the whole episode.
+		j.setPlan(time.Duration(min(info.Duration, probe.Secs)*float64(time.Second)), false)
+		return ffmpeg.Spec{
+			Src: j.src, Dst: j.part,
+			VideoIndex: video.Index,
+			AudioIndex: audioIdx,
+			Probe:      probe,
+		}, cleanup, nil
 	}
 
 	// Burning subtitles means redrawing every frame, so the copy shortcut is
