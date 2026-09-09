@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -238,15 +239,59 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	full := filepath.Join(dir, file)
+
 	// The playlist grows as segments appear, so it must never be cached.
-	// Segments never change once written, so they always can be.
 	if strings.HasSuffix(file, ".m3u8") {
+		b, err := os.ReadFile(full)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Write(startAtZero(b))
+		return
 	}
-	http.ServeFile(w, r, filepath.Join(dir, file))
+
+	// Segments never change once written, so they can be cached forever — but
+	// only once we know there is a segment. Marking a 404 immutable would burn
+	// that hole into the browser's cache for a year.
+	if _, err := os.Stat(full); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeFile(w, r, full)
+}
+
+// startAtZero pins the playhead to the beginning of the stream.
+//
+// While the encode runs the playlist has no #EXT-X-ENDLIST, and every player
+// reads a playlist without an end marker as a live broadcast — which means
+// joining at the newest segment. That is the worst possible place to sit. The
+// newest segment is the one the encoder has just finished, and the encoder
+// produces video at about 0.7x real time on this hardware, so the player runs
+// out of media within seconds, waits, and then resumes at whatever landed in
+// the meantime. Watched, it looks like the picture skipping: one, two, three,
+// then eight, nine.
+//
+// #EXT-X-START says where to begin instead, and both hls.js and Safari's own
+// player honour it ahead of their live-edge rule. Nothing is lost by starting
+// at zero: the whole point of watching early is to watch from the start.
+func startAtZero(b []byte) []byte {
+	if bytes.Contains(b, []byte("#EXT-X-START")) {
+		return b
+	}
+	head := []byte("#EXTM3U")
+	if !bytes.HasPrefix(b, head) {
+		return b // not a playlist we recognise; pass it through untouched
+	}
+	tag := []byte("\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
+	out := make([]byte, 0, len(b)+len(tag))
+	out = append(out, head...)
+	out = append(out, tag...)
+	return append(out, b[len(head):]...)
 }
 
 func isHex(s string) bool {

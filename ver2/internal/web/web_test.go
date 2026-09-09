@@ -193,7 +193,7 @@ func TestBrowseListsTheDirectory(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"ep2.mkv", "ep10.mkv", "notes.txt", "이 파일만", "폴더 전체"} {
+	for _, want := range []string{"ep2.mkv", "ep10.mkv", "notes.txt", "변환하기"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("browse page is missing %q", want)
 		}
@@ -202,9 +202,15 @@ func TestBrowseListsTheDirectory(t *testing.T) {
 	if strings.Index(body, "ep2.mkv") > strings.Index(body, "ep10.mkv") {
 		t.Error("listing is not in natural order")
 	}
-	// Only videos get conversion buttons.
-	if strings.Count(body, `name="scope"`) != 6 { // two videos, three buttons each
-		t.Errorf("expected buttons for the two videos only:\n%s", body)
+	// Conversion is configured on the detail page, so a listing only links
+	// there. Two identical-looking sets of buttons that behaved differently —
+	// the listing's silently skipped subtitles — was the confusion this
+	// removes.
+	if strings.Contains(body, `name="scope"`) {
+		t.Errorf("the listing still starts conversions of its own:\n%s", body)
+	}
+	if strings.Count(body, "변환하기") != 2 {
+		t.Errorf("expected a link to the detail page for each video:\n%s", body)
 	}
 }
 
@@ -599,6 +605,46 @@ func TestLiveServesThePlaylistUncached(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") {
 		t.Errorf("segment Cache-Control = %q", rec.Header().Get("Cache-Control"))
 	}
+
+	// A segment the encoder has not reached yet must not be remembered as
+	// missing. Marking a 404 immutable would leave a hole in the picture for
+	// the rest of the year, long after the segment exists.
+	rec = get(t, e.h, "/live/"+id+"/seg09999.m4s")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status for a segment that does not exist = %d", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+		t.Errorf("a 404 was served as immutable: %q", cc)
+	}
+}
+
+// Without an end marker the playlist looks like a live broadcast, and players
+// join a live broadcast at its newest segment — here, the frame the encoder
+// has only just produced. The player then starves every few seconds and hops
+// forward, which is seen as the video skipping. #EXT-X-START overrides that.
+func TestLivePlaylistStartsAtTheBeginning(t *testing.T) {
+	const playlist = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXTINF:4.0,\nseg00000.m4s\n"
+
+	got := string(startAtZero([]byte(playlist)))
+	if !strings.Contains(got, "#EXT-X-START:TIME-OFFSET=0") {
+		t.Errorf("playlist does not pin the start:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "#EXTM3U\n") {
+		t.Errorf("#EXTM3U must stay on the first line:\n%s", got)
+	}
+	if !strings.Contains(got, "#EXT-X-VERSION:7") || !strings.Contains(got, "seg00000.m4s") {
+		t.Errorf("the rest of the playlist was damaged:\n%s", got)
+	}
+
+	// Applied twice — a reload, say — it must not accumulate.
+	if again := string(startAtZero([]byte(got))); again != got {
+		t.Errorf("a second pass changed the playlist:\n%s", again)
+	}
+
+	// Anything that is not a playlist is passed through rather than guessed at.
+	if got := string(startAtZero([]byte("not a playlist"))); got != "not a playlist" {
+		t.Errorf("mangled a non-playlist: %q", got)
+	}
 }
 
 func TestWatchOffersTheLivePlayerWhileEncoding(t *testing.T) {
@@ -708,16 +754,16 @@ func TestBrowseWithNothingProbedTrustsTheExtension(t *testing.T) {
 	body := get(t, e.h, "/browse/").Body.String()
 
 	mp4 := section(t, body, "movie.mp4", "other.mkv")
-	if strings.Contains(mp4, `name="scope"`) {
-		t.Errorf("an .mp4 was offered conversion buttons:\n%s", mp4)
+	if strings.Contains(mp4, "변환하기") {
+		t.Errorf("an .mp4 was offered conversion rather than playback:\n%s", mp4)
 	}
 	if !strings.Contains(mp4, `href="/watch/movie.mp4"`) {
 		t.Errorf("no way to play the .mp4:\n%s", mp4)
 	}
 
 	mkv := section(t, body, "other.mkv", "")
-	if !strings.Contains(mkv, `name="scope"`) {
-		t.Errorf("a .mkv lost its conversion buttons:\n%s", mkv)
+	if !strings.Contains(mkv, "변환하기") {
+		t.Errorf("a .mkv offers no way to convert it:\n%s", mkv)
 	}
 }
 
@@ -746,7 +792,7 @@ func TestBrowseTrustsTheProbeOverTheExtension(t *testing.T) {
 	e := newEnv(t, false, "movie.mp4")
 	// The default stub reports HEVC, and Cached always answers.
 	body := get(t, e.h, "/browse/").Body.String()
-	if !strings.Contains(body, `name="scope"`) {
+	if !strings.Contains(body, "변환하기") {
 		t.Errorf("a .mp4 known to hold HEVC was not offered conversion:\n%s", body)
 	}
 	if strings.Contains(body, "그대로 재생 가능") {

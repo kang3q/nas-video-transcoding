@@ -34,6 +34,13 @@
         backBufferLength: Infinity, // scrub back over everything encoded so far
         manifestLoadingMaxRetry: 8, // the playlist lags the first segments
         levelLoadingMaxRetry: 8,
+        // A playlist with no end marker looks live, and live means "join at
+        // the newest segment". Here the newest segment is the one the encoder
+        // just finished, so sitting there starves the player every few
+        // seconds. The server also says this in the playlist itself
+        // (#EXT-X-START); this covers the case where it did not.
+        startPosition: 0,
+        maxLiveSyncPlaybackRate: 1, // never speed up to chase the encoder
       });
       hls.loadSource(url);
       hls.attachMedia(video);

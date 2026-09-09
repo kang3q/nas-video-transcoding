@@ -25,12 +25,7 @@
         {{else if .PlaysAsIs}}
           <a class="btn play" href="/watch/{{.Rel}}">재생</a>
         {{else}}
-          <form method="post" action="/convert" title="자막을 고르려면 파일 이름을 누르세요">
-            <input type="hidden" name="rel" value="{{.Rel}}">
-            <button name="scope" value="file">이 파일만</button>
-            <button name="scope" value="onwards">여기서부터 끝까지</button>
-            <button name="scope" value="folder">폴더 전체</button>
-          </form>
+          <a class="btn" href="/watch/{{.Rel}}">변환하기</a>
         {{end}}
       </div>
     {{else}}
@@ -43,8 +38,9 @@
 
 {{if .HasVideos}}
 <p class="hint">
-  어느 버튼을 눌러도 <strong>고른 파일이 가장 먼저</strong> 변환됩니다.
-  “폴더 전체”는 고른 지점부터 돌아 앞쪽 파일을 마지막에 처리합니다.
+  파일을 누르면 안에 무엇이 들었는지 확인하고, 자막과 범위를 정해 변환합니다.
+  범위가 무엇이든 <strong>고른 파일이 가장 먼저</strong> 변환되므로 오늘 볼 것이
+  가장 먼저 준비됩니다.
 </p>
 {{end}}
 {{end}}
