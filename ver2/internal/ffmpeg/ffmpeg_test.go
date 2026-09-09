@@ -21,11 +21,12 @@ func TestArgsEncodePath(t *testing.T) {
 	}, testSettings))
 
 	for _, want := range []string{
-		" -map 0:0 ", " -map 0:1 ",
+		" -map 0:0 ", " -map 0:1 ", " -sn ", " -dn ",
 		" -c:v libx264 ", " -preset superfast ", " -b:v 2600k ",
+		" -profile:v high ", " -level 4.2 ",
 		" -c:a aac ", " -b:a 320k ", " -ac 2 ", " -ar 48000 ",
 		" -threads 3 ", " -fps_mode vfr ", " -pix_fmt yuv420p ",
-		" -progress pipe:1 ", " -f mp4 /out/a.mp4.part ",
+		" -progress pipe:1 ", " -movflags +faststart ", " -f mp4 /out/a.mp4.part ",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -57,6 +58,65 @@ func TestArgsRemuxPath(t *testing.T) {
 	}
 	if !strings.Contains(got, " -movflags +faststart ") {
 		t.Errorf("remux should move the index to the front:\n%s", got)
+	}
+}
+
+// Without faststart a player has to fetch the end of the file before it can
+// start, which over a network is a long stall or a timeout. Every path that
+// writes a plain MP4 needs it, not just the cheap one.
+func TestArgsAlwaysMovesTheIndexToTheFront(t *testing.T) {
+	for _, remux := range []bool{true, false} {
+		got := argLine(Args(Spec{
+			Src: "/media/a.mkv", Dst: "/out/a.mp4.part",
+			Remux: remux, VideoIndex: 0, AudioIndex: 1,
+		}, testSettings))
+		if !strings.Contains(got, " -movflags +faststart ") {
+			t.Errorf("remux=%v is missing faststart:\n%s", remux, got)
+		}
+	}
+}
+
+// H.264 above 1080p is outside what an Apple TV plays, and a level that does
+// not match the frame it describes is a malformed file its decoder refuses.
+func TestArgsScales4KDownTo1080p(t *testing.T) {
+	got := argLine(Args(Spec{
+		Src: "/media/a.mkv", Dst: "/out/a.mp4.part",
+		VideoIndex: 0, AudioIndex: 1, Width: 3840, Height: 2160,
+	}, testSettings))
+
+	if !strings.Contains(got, "scale='min(1920,iw)':-2") {
+		t.Errorf("a 4K source was not scaled down:\n%s", got)
+	}
+	if !strings.Contains(got, " -level 4.2 ") {
+		t.Errorf("level is not 4.2:\n%s", got)
+	}
+}
+
+func TestArgsLeaves1080pAlone(t *testing.T) {
+	got := argLine(Args(Spec{
+		Src: "/media/a.mkv", Dst: "/out/a.mp4.part",
+		VideoIndex: 0, AudioIndex: 1, Width: 1920, Height: 1080,
+	}, testSettings))
+	if strings.Contains(got, "scale=") {
+		t.Errorf("1080p was scaled for no reason:\n%s", got)
+	}
+}
+
+// Scaling has to come first so libass draws text at the size it will be shown.
+func TestArgsScalesBeforeBurningSubtitles(t *testing.T) {
+	got := argLine(Args(Spec{
+		Src: "/media/a.mkv", Dst: "/out/a.mp4.part",
+		VideoIndex: 0, AudioIndex: 1, Width: 3840, Height: 2160,
+		BurnSubs: "/tmp/j.ass",
+	}, testSettings))
+
+	scale := strings.Index(got, "scale=")
+	subs := strings.Index(got, "subtitles=")
+	if scale < 0 || subs < 0 {
+		t.Fatalf("filter chain incomplete:\n%s", got)
+	}
+	if scale > subs {
+		t.Error("subtitles are drawn before the scale, so the text gets resampled")
 	}
 }
 

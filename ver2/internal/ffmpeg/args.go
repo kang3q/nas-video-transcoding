@@ -51,6 +51,13 @@ type Spec struct {
 	// be somewhere safe and simple — see [FilterPath] for why.
 	BurnSubs string
 
+	// Width and Height are the source's, and decide whether it has to be
+	// scaled down. H.264 above 1080p is outside what an Apple TV will play,
+	// and writing a 4K frame with a level that claims otherwise produces a
+	// file its decoder rejects outright.
+	Width  int
+	Height int
+
 	// LiveDir, when set, also writes an HLS rendition there so the job can be
 	// watched before it finishes. The encode still happens once.
 	LiveDir     string
@@ -71,23 +78,30 @@ func Args(s Spec, set Settings) []string {
 	}
 	a = append(a, "-map_metadata", "0")
 
+	// Subtitles and data streams are already excluded by mapping only the two
+	// streams we want, but saying so costs nothing and survives someone
+	// changing the mapping later.
+	a = append(a, "-sn", "-dn")
+
 	switch {
 	case s.Remux && s.BurnSubs == "":
-		// Nothing to re-encode. Put the index at the front while we are here,
-		// so a player can start without reading the end of the file first.
-		a = append(a, "-c", "copy", "-movflags", "+faststart")
+		a = append(a, "-c", "copy")
 	default:
 		if set.Threads > 0 {
 			a = append(a, "-threads", strconv.Itoa(set.Threads))
 		}
-		if s.BurnSubs != "" {
-			a = append(a, "-vf", "subtitles="+FilterPath(s.BurnSubs))
+		if vf := videoFilter(s); vf != "" {
+			a = append(a, "-vf", vf)
 		}
 		a = append(a,
 			"-c:v", "libx264",
 			"-preset", set.Preset,
-			"-profile:v", "main",
-			"-level", "4.0",
+			// High profile and level 4.2 are what an Apple TV expects for
+			// 1080p H.264. The level has to match what is actually written:
+			// claiming 4.0 over a larger frame is a malformed file, and
+			// Apple's decoder checks.
+			"-profile:v", "high",
+			"-level", "4.2",
 			"-pix_fmt", "yuv420p",
 			"-b:v", set.VideoBitrate,
 			"-fps_mode", "vfr",
@@ -114,7 +128,12 @@ func Args(s Spec, set Settings) []string {
 		"-stats_period", "1", "-nostats", "-progress", "pipe:1")
 
 	if s.LiveDir == "" {
-		return append(a, "-f", "mp4", s.Dst)
+		// faststart moves the index to the front of the file. Without it a
+		// player has to fetch the end before it can begin, which over a
+		// network means a long stall or a timeout on a large file — and
+		// network playback is the entire point here. With tee it goes on the
+		// mp4 branch instead; see teeSpec.
+		return append(a, "-movflags", "+faststart", "-f", "mp4", s.Dst)
 	}
 	return append(a, "-f", "tee", teeSpec(s))
 }
@@ -144,7 +163,26 @@ func teeSpec(s Spec) string {
 		"hls_segment_filename=" + s.LiveDir + "/seg%05d.m4s",
 	}, ":")
 
+	// No faststart on this branch. It works by seeking back at the end, and
+	// whether tee gives its slaves a seekable output is unverified — a failure
+	// here would lose the artifact, which is the one thing that must survive.
 	return fmt.Sprintf("[f=mp4]%s|[%s]%s/index.m3u8", s.Dst, hls, s.LiveDir)
+}
+
+// videoFilter builds the -vf chain. Scaling comes before subtitles so libass
+// draws text at the size it will actually be shown, rather than having it
+// resampled afterwards.
+func videoFilter(s Spec) string {
+	var parts []string
+	if s.Width > 1920 || s.Height > 1080 {
+		// Cap the width at 1920; -2 derives a height that keeps the aspect
+		// ratio and stays even, which H.264 requires.
+		parts = append(parts, "scale='min(1920,iw)':-2")
+	}
+	if s.BurnSubs != "" {
+		parts = append(parts, "subtitles="+FilterPath(s.BurnSubs))
+	}
+	return strings.Join(parts, ",")
 }
 
 // FilterPath escapes a path for use inside a filter argument. ffmpeg's filter

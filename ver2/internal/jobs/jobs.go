@@ -652,6 +652,8 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 		VideoIndex: video.Index,
 		AudioIndex: audioIdx,
 		BurnSubs:   burn,
+		Width:      video.Width,
+		Height:     video.Height,
 		LiveDir:    j.liveDir,
 	}, cleanup, nil
 }
