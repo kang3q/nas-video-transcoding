@@ -6,16 +6,19 @@
 #        sudo mkdir -p /volume1/downloads/_nvt /volume1/docker/nvt2/state
 #   4. sudo docker compose up -d
 #
-# 그다음 브라우저에서 http://<나스IP>:8081 을 엽니다.
+# 그다음 브라우저에서 http://<나스IP>:8080 을 엽니다.
 services:
   nvt2:
     image: ghcr.io/kang3q/nas-video-transcoding:latest
     pull_policy: always
     container_name: nvt2
     restart: unless-stopped
+    # 종료 신호를 받으면 남은 큐를 기록하고 실행 중인 ffmpeg 을 정리합니다.
+    # 기본 10초로는 모자랄 수 있습니다.
+    stop_grace_period: 30s
     ports:
-      # v1 이 8080 을 쓰고 있다면 겹치지 않게 8081 로 둡니다.
-      - "8081:8080"
+      # v1 을 나란히 돌린다면 겹치지 않게 왼쪽 숫자를 8081 등으로 바꾸세요.
+      - "8080:8080"
     volumes:
       # 원본 라이브러리. 읽기 전용.
       - /volume1/downloads:/media:ro
@@ -40,10 +43,13 @@ services:
       # 첫 파일이 10% 를 지나면 텔레그램으로 알리고, 거기서 나머지를 중단할 수
       # 있습니다. 봇이 텔레그램을 주기적으로 조회하는 방식이라 포트포워딩 없이
       # 집 밖에서도 동작합니다.
-      # NVT2_TELEGRAM_TOKEN: "123456:ABC..."
-      # NVT2_TELEGRAM_CHAT_ID: "123456789"
-      # 알림에 넣을 웹 주소. 없으면 링크 없이 글만 갑니다.
-      # NVT2_PUBLIC_URL: "http://192.168.0.10:8081"
+      #
+      # 값은 이 파일이 아니라 옆에 둔 .env 에 적습니다. .env 는 커밋되지
+      # 않으므로 토큰이 실수로 저장소에 들어갈 일이 없습니다. .env.example 을
+      # 복사해서 채우세요.
+      NVT2_TELEGRAM_TOKEN: "${NVT2_TELEGRAM_TOKEN:-}"
+      NVT2_TELEGRAM_CHAT_ID: "${NVT2_TELEGRAM_CHAT_ID:-}"
+      NVT2_PUBLIC_URL: "${NVT2_PUBLIC_URL:-}"
       # 외부에서 접속한다면 반드시 설정하세요.
       # NVT2_USER: nvt
       # NVT2_PASS: changeme

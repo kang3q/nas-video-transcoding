@@ -73,8 +73,12 @@ func main() {
 		Workers:      cfg.Workers,
 		LiveRoot:     liveRoot,
 		SegmentSecs:  cfg.SegmentSecs,
+		StateDir:     cfg.StateDir,
 		CheckpointAt: float64(cfg.CheckpointPercent) / 100,
 	})
+	// Whatever was still outstanding when this last stopped. A batch is a
+	// night's work; a restart should not mean reconstructing it by hand.
+	queue.Restore()
 
 	tg := notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChat)
 	watcher := notify.NewWatcher(queue, tg, cfg.PublicBaseURL)
@@ -126,10 +130,13 @@ func main() {
 	<-stop
 	log.Print("shutting down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	stopNotify()
 	httpSrv.Shutdown(ctx)
+	// Write down what is left before interrupting anything, so a conversion
+	// that was running is recorded as still to do rather than as cancelled.
+	queue.Shutdown(ctx)
 	prober.Flush()
 }
 

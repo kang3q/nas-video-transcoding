@@ -165,6 +165,7 @@ type Batch struct {
 	mu         sync.Mutex
 	jobIDs     []string
 	checkpoint bool // the inspection prompt has been sent
+	opts       Options
 }
 
 type BatchView struct {
@@ -199,6 +200,10 @@ type Queue struct {
 	workers     int
 	liveRoot    string
 	segmentSecs int
+	stateFile   string
+	// stopping closes the queue for business: no new job starts, and nothing
+	// rewrites the state file after shutdown has recorded it.
+	stopping bool
 	// checkpointAt is the fraction of the first file in a batch to reach
 	// before asking whether the result looks right. Far enough in that an
 	// opening sequence is over and burned-in subtitles are on screen.
@@ -227,6 +232,7 @@ type Deps struct {
 	Workers      int
 	LiveRoot     string
 	SegmentSecs  int
+	StateDir     string
 	CheckpointAt float64
 }
 
@@ -240,7 +246,8 @@ func NewQueue(d Deps) *Queue {
 	q := &Queue{
 		mapper: d.Mapper, prober: d.Prober, runner: d.Runner, subtitles: d.Subs,
 		settings: d.Settings, workers: d.Workers,
-		liveRoot: d.LiveRoot, segmentSecs: d.SegmentSecs, checkpointAt: d.CheckpointAt,
+		liveRoot: d.LiveRoot, segmentSecs: d.SegmentSecs,
+		stateFile: stateFilePath(d.StateDir), checkpointAt: d.CheckpointAt,
 		jobs: map[string]*Job{}, batches: map[string]*Batch{},
 		running: map[string]*Job{}, byOutput: map[string]string{},
 		wake: make(chan struct{}, 1),
@@ -259,7 +266,13 @@ func NewQueue(d Deps) *Queue {
 // files that would produce the same output name are refused outright — one
 // silently overwriting the other is the worse outcome.
 func (q *Queue) Enqueue(dir outpath.Rel, rels []outpath.Rel, opts Options) (*Batch, error) {
-	batch := &Batch{ID: newID(), Dir: dir, Created: time.Now()}
+	return q.enqueue(newID(), dir, rels, opts)
+}
+
+// enqueue takes the batch id explicitly so a restored batch keeps the one it
+// had — a stop button pressed from an old notification still finds it.
+func (q *Queue) enqueue(id string, dir outpath.Rel, rels []outpath.Rel, opts Options) (*Batch, error) {
+	batch := &Batch{ID: id, Dir: dir, Created: time.Now(), opts: opts}
 
 	// Check the whole list before creating anything. Rejecting halfway would
 	// leave the accepted half already converting.
@@ -316,6 +329,7 @@ func (q *Queue) Enqueue(dir outpath.Rel, rels []outpath.Rel, opts Options) (*Bat
 	for _, j := range created {
 		q.emit(Event{Kind: "state", Job: j.View(), BatchID: batch.ID})
 	}
+	q.save()
 	q.nudge()
 	return batch, nil
 }
@@ -341,6 +355,7 @@ func (q *Queue) Cancel(id string) bool {
 		os.Remove(j.part)
 		q.release(j)
 		q.emit(Event{Kind: "state", Job: j.View(), BatchID: j.BatchID})
+		q.save()
 		q.nudge()
 		return true
 	}
@@ -548,7 +563,7 @@ func (q *Queue) dispatchLoop() {
 	for range q.wake {
 		for {
 			q.mu.Lock()
-			if len(q.running) >= q.workers || len(q.pending) == 0 {
+			if q.stopping || len(q.running) >= q.workers || len(q.pending) == 0 {
 				q.mu.Unlock()
 				break
 			}
@@ -574,6 +589,7 @@ func (q *Queue) run(j *Job) {
 		q.finishedLocked(j.ID)
 		q.mu.Unlock()
 		q.emit(Event{Kind: "state", Job: j.View(), BatchID: j.BatchID})
+		q.save()
 		q.nudge()
 	}()
 
@@ -727,6 +743,8 @@ func (q *Queue) maybeCheckpoint(j *Job) {
 	b.checkpoint = true
 	b.mu.Unlock()
 
+	// Record that the prompt went out, so a restart does not send it again.
+	q.save()
 	q.emit(Event{Kind: "checkpoint", Job: j.View(), BatchID: j.BatchID})
 }
 
