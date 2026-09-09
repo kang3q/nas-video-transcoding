@@ -306,8 +306,17 @@ func (q *Queue) enqueue(id string, dir outpath.Rel, rels []outpath.Rel, opts Opt
 			opts: opts, state: Queued, queuedAt: time.Now(),
 			speed: ffmpeg.NewSpeedTracker(30 * time.Second),
 		}
-		if opts.Live {
+		// Only the first file gets a preview. Its purpose is the checkpoint —
+		// look at the subtitles and the picture once, early, and stop the rest
+		// if they are wrong — and that judgement is made and over with on the
+		// first file. Every later one would write segments nobody opens, and
+		// pay for them twice: the HLS branch forces a keyframe every four
+		// seconds, which costs quality at the same bitrate and time on an
+		// encoder that is already the bottleneck.
+		if opts.Live && len(created) == 0 {
 			j.liveDir = filepath.Join(q.liveRoot, j.ID)
+		} else {
+			j.opts.Live = false // so the page does not offer a player there is no stream for
 		}
 		if opts.Subtitles && len(created) == 0 {
 			j.preferredSub = opts.PickedSubtitleID
@@ -742,6 +751,9 @@ func (q *Queue) maybeCheckpoint(j *Job) {
 	}
 	b.checkpoint = true
 	b.mu.Unlock()
+
+	log.Printf("checkpoint: %s reached %.0f%%, offering it for inspection",
+		j.Rel.String(), q.checkpointAt*100)
 
 	// Record that the prompt went out, so a restart does not send it again.
 	q.save()

@@ -50,16 +50,38 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 	go w.tg.Poll(ctx, func(cb Callback) { w.onCallback(ctx, cb) })
 
-	events, stop := w.q.Subscribe()
-	defer stop()
-
+	// The queue cuts loose any listener it cannot deliver a state change to,
+	// on the grounds that its picture is now wrong. For a browser that is
+	// right — it reconnects and re-reads everything. This listener had no such
+	// recovery: one slow Telegram call while an encode reported progress every
+	// second was enough to fill the buffer, and the notifier then stayed
+	// silent for the rest of the process's life with nothing said about it.
 	for {
+		events, stop := w.q.Subscribe()
+		done := w.consume(ctx, events)
+		stop()
+		if done {
+			return
+		}
+		log.Print("telegram: fell behind the queue and was disconnected; listening again")
 		select {
 		case <-ctx.Done():
 			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// consume reports true when the context ended, false when the queue dropped
+// this listener and it is worth reconnecting.
+func (w *Watcher) consume(ctx context.Context, events <-chan jobs.Event) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return true
 		case ev, ok := <-events:
 			if !ok {
-				return
+				return false
 			}
 			switch ev.Kind {
 			case "checkpoint":
@@ -100,9 +122,10 @@ func (w *Watcher) onCheckpoint(ctx context.Context, ev jobs.Event) {
 
 	id, err := w.tg.Send(ctx, b.String(), buttons)
 	if err != nil {
-		log.Printf("telegram checkpoint: %v", err)
+		log.Printf("telegram checkpoint for %s failed: %v", ev.Job.Name, err)
 		return
 	}
+	log.Printf("telegram checkpoint sent for %s", ev.Job.Name)
 	w.mu.Lock()
 	w.messages[ev.BatchID] = id
 	w.mu.Unlock()

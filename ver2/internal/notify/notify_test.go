@@ -428,3 +428,29 @@ func TestWatchURLEdges(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// Telegram answers a refusal with a 200 and "ok": false, so the status code is
+// not enough. Reading one as a delivered message would leave a message id of
+// zero behind and no sign that anything went wrong.
+func TestSendReportsARefusal(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/botTOKEN/sendMessage", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"ok":false,"description":"Bad Request: chat not found"}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	tg := NewTelegram("TOKEN", "12345")
+	tg.api = srv.URL
+
+	id, err := tg.Send(context.Background(), "안녕", nil)
+	if err == nil {
+		t.Fatal("a refused message was reported as sent")
+	}
+	if !strings.Contains(err.Error(), "chat not found") {
+		t.Errorf("error does not say what Telegram said: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("message id = %d, want 0", id)
+	}
+}

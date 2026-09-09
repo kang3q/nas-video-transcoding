@@ -155,15 +155,18 @@ func (t *Telegram) call(ctx context.Context, method string, payload map[string]a
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("telegram %s: %s: %s", method, resp.Status, strings.TrimSpace(string(raw)))
 	}
-	if out != nil {
-		return json.Unmarshal(raw, out)
-	}
+	// "ok": false can arrive with a 200, and the caller must not read a
+	// refusal as a delivered message. This was checked only on the calls that
+	// wanted nothing back, which is to say not on sendMessage.
 	var probe struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 	}
 	if json.Unmarshal(raw, &probe) == nil && !probe.OK {
 		return fmt.Errorf("telegram %s: %s", method, probe.Description)
+	}
+	if out != nil {
+		return json.Unmarshal(raw, out)
 	}
 	return nil
 }

@@ -24,7 +24,7 @@ services:
       # 값은 이 파일이 아니라 옆에 둔 .env 에 적습니다. .env 는 커밋되지
       # 않으므로 토큰이 실수로 저장소에 들어갈 일이 없습니다. .env.example 을
       # 복사해서 채우세요.
-      NVT2_TELEGRAM_TOKEN: "${NVT2_TELEGRAM_TOKEN:-}"
-      NVT2_TELEGRAM_CHAT_ID: "${NVT2_TELEGRAM_CHAT_ID:-}"
-      NVT2_PUBLIC_URL: "${NVT2_PUBLIC_URL:-}"
+      NVT2_TELEGRAM_TOKEN: "${NVT2_TELEGRAM_TOKEN}"
+      NVT2_TELEGRAM_CHAT_ID: "${NVT2_TELEGRAM_CHAT_ID}"
+      NVT2_PUBLIC_URL: "${NVT2_PUBLIC_URL}"
       NVT2_LIVE: "true"

@@ -43,6 +43,10 @@ v2 는 클릭이 곧 의도이므로 알아낼 것이 없습니다.
 **자막을 구울 수 있습니다.** 내장 트랙과 옆에 놓인 자막 파일을 모두 찾아 **한글을
 먼저** 보여줍니다.
 
+미리보기는 **첫 파일에만** 만듭니다. 자막과 화질을 확인하는 건 한 번이면 되고,
+HLS 지선이 붙으면 4초마다 키프레임을 강제해야 해서 같은 비트레이트에서 화질이
+떨어지고 인코딩도 조금 느려집니다. 둘째 편부터는 그 비용을 낼 이유가 없습니다.
+
 **첫 파일이 10% 를 지나면 텔레그램으로 알립니다.** 인트로가 지난 지점이라 자막이
 화면에 나오고, 싱크를 눈으로 확인할 수 있습니다. 아니다 싶으면 **거기서 나머지를
 중단**합니다.
@@ -62,8 +66,18 @@ mkdir -p /volume1/docker/nvt2 && cd /volume1/docker/nvt2
 curl -sO https://raw.githubusercontent.com/kang3q/nas-video-transcoding/main/docker-compose.nas.yml
 mv docker-compose.nas.yml docker-compose.yml
 vi docker-compose.yml          # 볼륨 경로 확인
+
+# 텔레그램 알림을 쓴다면. 이 폴더에, 이 이름으로 있어야 합니다.
+curl -sO https://raw.githubusercontent.com/kang3q/nas-video-transcoding/main/.env.example
+mv .env.example .env && vi .env
+
 sudo docker compose up -d
+docker logs nvt2 | head -20     # "telegram: on" 인지 확인
 ```
+
+`.env` 가 없으면 알림은 **조용히 꺼집니다.** compose 가 `variable is not set`
+경고를 찍고 로그에 `telegram: off` 가 남으니, 알림이 안 오면 그 두 줄부터
+보세요.
 
 브라우저에서 `http://<나스IP>:8081`.
 
@@ -134,7 +148,7 @@ v1 을 계속 쓰신다면 `docker-compose.v1.nas.yml` 이 `v1.0.0` 에 고정�
 | `NVT2_PRESET` | `superfast` | x264 프리셋 |
 | `NVT2_VIDEO_BITRATE` | `2600k` | |
 | `NVT2_AUDIO_BITRATE` | `320k` | |
-| `NVT2_LIVE` | `true` | 변환 중 시청용 HLS 생성 |
+| `NVT2_LIVE` | `true` | 변환 중 시청용 HLS 생성 (배치의 첫 파일만) |
 | `NVT2_SEGMENT_SEC` | `4` | HLS 세그먼트 길이 |
 | `NVT2_CHECKPOINT_PERCENT` | `10` | 첫 파일 확인 시점 |
 | `NVT2_TELEGRAM_TOKEN` | — | 없으면 알림 비활성. **`.env` 에 적습니다** |

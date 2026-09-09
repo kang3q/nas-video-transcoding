@@ -673,3 +673,54 @@ func TestSweepRemovesInterruptedOutput(t *testing.T) {
 		t.Errorf("live root = %v, %v; want an empty directory", ents, err)
 	}
 }
+
+// The preview exists for the checkpoint — one early look at the subtitles and
+// the picture — and that look happens on the first file. Every later one would
+// write segments nobody opens, and pay for them in quality: the HLS branch
+// forces a keyframe every few seconds.
+func TestOnlyTheFirstFileGetsAPreview(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	liveDirs := map[string]string{}
+
+	runner := fakeRunner{fn: func(ctx context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		mu.Lock()
+		liveDirs[filepath.Base(spec.Src)] = spec.LiveDir
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "S/ep1.mkv", "S/ep2.mkv", "S/ep3.mkv")
+
+	if _, err := h.q.EnqueueDir(h.lib, h.rel(t, "S/ep1.mkv"), library.ScopeFolder, Options{Live: true}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	waitFor(t, "every job to finish", func() bool {
+		s := h.states()
+		return s["ep1.mkv"] == Done && s["ep2.mkv"] == Done && s["ep3.mkv"] == Done
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if liveDirs["ep1.mkv"] == "" {
+		t.Error("the first file had no preview, so there is nothing to check at the checkpoint")
+	}
+	for _, name := range []string{"ep2.mkv", "ep3.mkv"} {
+		if liveDirs[name] != "" {
+			t.Errorf("%s wrote a preview nobody asked for: %q", name, liveDirs[name])
+		}
+	}
+
+	// The view has to agree, or the page offers a player for a stream that was
+	// never written.
+	for _, v := range h.q.Snapshot() {
+		if v.Name != "ep1.mkv" && v.Live {
+			t.Errorf("%s reports a live preview it does not have", v.Name)
+		}
+	}
+}

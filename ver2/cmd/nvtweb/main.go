@@ -114,7 +114,8 @@ func main() {
 			log.Print("telegram: NVT2_PUBLIC_URL is unset, so notifications carry no link")
 		}
 	} else {
-		log.Print("telegram: off (set NVT2_TELEGRAM_TOKEN and NVT2_TELEGRAM_CHAT_ID)")
+		log.Print("telegram: off — NVT2_TELEGRAM_TOKEN and NVT2_TELEGRAM_CHAT_ID are unset. " +
+			"With compose they come from a .env in the same folder as the compose file.")
 	}
 
 	go flushPeriodically(prober)

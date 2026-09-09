@@ -67,7 +67,12 @@
   <form method="post" action="/convert">
     <input type="hidden" name="rel" value="{{.Rel}}">
     {{if .LiveOn}}
-    <label><input type="checkbox" name="nolive" value="1"> 변환 중 미리보기 만들지 않기 (디스크 절약)</label>
+    <label><input type="checkbox" name="nolive" value="1"> 변환 중 미리보기 만들지 않기</label>
+    <p class="hint">
+      미리보기는 <strong>첫 파일에만</strong> 만들어집니다. 자막과 화질을 확인하는
+      건 한 번이면 되고, 미리보기를 켜면 4초마다 키프레임을 강제해야 해서 같은
+      비트레이트에서 화질이 조금 떨어집니다.
+    </p>
     {{end}}
     {{if .Subs}}
     <fieldset class="subs">
