@@ -98,3 +98,22 @@ fieldset.subs {
 fieldset.subs legend { padding: 0 0.4rem; font-weight: 600; }
 fieldset.subs label { display: block; margin: 0.35rem 0; cursor: pointer; }
 fieldset.subs label.off { opacity: 0.5; cursor: not-allowed; }
+
+/* On a file that is already converted the page is for watching it, so the
+   conversion form folds away rather than sitting under the player. */
+details.convert {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 0.9rem;
+  margin: 1.2rem 0;
+}
+details.convert > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.7rem 0;
+  margin: 0 -0.9rem;
+  padding-left: 0.9rem;
+  list-style-position: inside;
+}
+details.convert[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0.8rem; }
+details.convert > *:last-child { margin-bottom: 0.9rem; }

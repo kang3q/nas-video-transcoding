@@ -913,3 +913,143 @@ func TestUntaggedKoreanSidecarIsTheDefault(t *testing.T) {
 		t.Error("burning was left off even though a Korean subtitle sits beside the file")
 	}
 }
+
+// --- discarding a conversion ---
+
+// A conversion can be wrong in ways only watching reveals: the wrong subtitle
+// track, sync that drifts, a picture worse than expected. Getting rid of it
+// has to be possible from the page where that was noticed.
+func TestDiscardRemovesTheConversion(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	converted := filepath.Join(e.out, "a.mp4")
+	if err := os.WriteFile(converted, []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `action="/discard"`) {
+		t.Fatalf("a converted file offers no way to discard it:\n%s", body)
+	}
+
+	rec := post(t, e.h, "/discard", url.Values{"rel": {"a.mkv"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/watch/a.mkv" {
+		t.Errorf("Location = %q, want the same page back", got)
+	}
+	if _, err := os.Stat(converted); !os.IsNotExist(err) {
+		t.Error("the conversion is still there")
+	}
+
+	// The source is on a read-only mount and must never be a casualty of this.
+	if _, err := os.Stat(filepath.Join(e.src, "a.mkv")); err != nil {
+		t.Fatalf("the source was touched: %v", err)
+	}
+
+	// And the page now offers to make it again.
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `name="scope"`) {
+		t.Errorf("no way to convert it again:\n%s", body)
+	}
+}
+
+// Removing the output while ffmpeg is writing it would leave the encode
+// pointed at a file nobody can find, and the rename at the end would put the
+// old name back regardless.
+func TestDiscardRefusesWhileConverting(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+	post(t, e.h, "/convert", url.Values{"rel": {"a.mkv"}, "scope": {"file"}})
+	waitFor(t, "the job to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Running {
+				return true
+			}
+		}
+		return false
+	})
+
+	rec := post(t, e.h, "/discard", url.Values{"rel": {"a.mkv"}})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+}
+
+// The conversion form is not the point of a page that can play something, so
+// it folds away — but it stays on the page, one click from open.
+func TestTheConversionFormFoldsAwayOnceConverted(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `<details class="convert" open>`) {
+		t.Errorf("nothing to play, so the form should be open:\n%s", body)
+	}
+
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if strings.Contains(body, `<details class="convert" open>`) {
+		t.Errorf("the form is still unfolded over the player:\n%s", body)
+	}
+	if !strings.Contains(body, `name="scope"`) {
+		t.Errorf("folding it away removed it:\n%s", body)
+	}
+}
+
+// countingProber says how often ffprobe would actually have run.
+type countingProber struct {
+	info   mediainfo.Info
+	cached bool
+
+	mu     sync.Mutex
+	probes int
+}
+
+func (p *countingProber) Probe(context.Context, string, os.FileInfo) (mediainfo.Info, error) {
+	p.mu.Lock()
+	p.probes++
+	p.mu.Unlock()
+	return p.info, nil
+}
+
+func (p *countingProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) {
+	if !p.cached {
+		return mediainfo.Info{}, false
+	}
+	return p.info, true
+}
+
+func (p *countingProber) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.probes
+}
+
+// Opening a converted file means wanting to watch it. ffprobe reads the
+// source, which on a NAS is large, on a spinning disk, and across the network
+// — seconds of waiting for a codec caption beside a player that is ready now.
+func TestAConvertedFileIsNotHeldUpByProbing(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	p := &countingProber{info: mediainfo.Info{Duration: 100}}
+	e.srv.prober = p
+
+	// Not converted yet: the page has to work out whether conversion is even
+	// needed, so probing is the right thing to do.
+	get(t, e.h, "/watch/a.mkv")
+	if p.count() == 0 {
+		t.Error("a file that might need converting was never inspected")
+	}
+
+	before := p.count()
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if n := p.count() - before; n != 0 {
+		t.Errorf("ffprobe ran %d time(s) on a page that only had to play a file", n)
+	}
+	if !strings.Contains(body, "/media/") {
+		t.Errorf("the player is missing:\n%s", body)
+	}
+}

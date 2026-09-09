@@ -8,7 +8,18 @@
 
 {{if .Converted}}
   <video controls preload="metadata" src="{{.MediaURL}}"></video>
-  <p class="meta"><a href="{{.MediaURL}}" download>파일 내려받기</a></p>
+  <p class="meta">
+    <a href="{{.MediaURL}}" download>파일 내려받기</a>
+  </p>
+  <form method="post" action="/discard"
+        onsubmit="return confirm('변환된 MP4 를 지웁니다. 원본은 그대로입니다. 계속할까요?')">
+    <input type="hidden" name="rel" value="{{.Rel}}">
+    <button class="danger">변환 결과 지우고 다시 만들기</button>
+  </form>
+  <p class="hint">
+    자막이 틀렸거나 싱크가 어긋났다면 여기서 지우고 다시 변환하세요. 지워지는 건
+    변환된 MP4 뿐이고 원본은 읽기 전용이라 손대지 않습니다.
+  </p>
 {{else if .PlaysAsIs}}
   <video controls preload="metadata" src="{{.SourceURL}}"></video>
   <p class="hint">
@@ -50,18 +61,20 @@
   <p class="empty">아직 변환하지 않은 파일입니다.</p>
 {{end}}
 
-<section class="convert">
+{{/* When there is something to play, the page is for playing it and the form
+     folds away. When there is not, it is the only thing on the page. */}}
+<details class="convert"{{if not (or .Converted .PlaysAsIs)}} open{{end}}>
+  <summary>
+    {{if .Converted}}다시 변환하기{{else if .PlaysAsIs}}그래도 변환하기{{else}}변환{{end}}
+  </summary>
   {{if .PlaysAsIs}}
-    <h2>그래도 변환하기</h2>
     <p class="hint">
       이 파일은 변환하지 않아도 재생됩니다. 자막을 화면에 굽고 싶을 때만
       의미가 있고, 그러면 영상을 다시 그려야 하므로 시간이 걸립니다.
     </p>
   {{else if not .Probed}}
-    <h2>변환</h2>
     <p class="hint">파일 내용을 아직 확인하지 못했습니다.</p>
   {{else}}
-    <h2>변환</h2>
     <p class="hint">이 조합은 브라우저에서 그대로 재생되지 않아 변환이 필요합니다.</p>
   {{end}}
   <form method="post" action="/convert">
@@ -109,5 +122,5 @@
       <button name="scope" value="folder">폴더 전체</button>
     </div>
   </form>
-</section>
+</details>
 {{end}}

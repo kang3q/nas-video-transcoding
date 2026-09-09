@@ -89,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs", s.handleJobs)
 
 	mux.HandleFunc("POST /convert", s.handleConvert)
+	mux.HandleFunc("POST /discard", s.handleDiscard)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /batches/{id}/cancel", s.handleCancelBatch)
 

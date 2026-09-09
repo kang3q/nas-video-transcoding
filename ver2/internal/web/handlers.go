@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -129,7 +130,19 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	data.LiveOn = s.cfg.Live
 
-	if info, ok := s.inspect(r.Context(), rel); ok {
+	// A file that is already converted is opened to watch it, and ffprobe on
+	// the source can take seconds on a NAS — the file is large, the disk is
+	// spinning, and it is being read over the network. There is nothing to
+	// decide here that is worth waiting for: the codecs are a caption and the
+	// conversion form is folded away. So take a cached answer if there is one
+	// and otherwise go straight to the player.
+	info, probed := mediainfo.Info{}, false
+	if data.Converted {
+		info, probed = s.cachedInfo(rel)
+	} else {
+		info, probed = s.inspect(r.Context(), rel)
+	}
+	if probed {
 		data.Probed = true
 		data.Codecs = describe(info)
 		if info.BrowserReady() {
@@ -165,6 +178,16 @@ func (s *Server) looksPlayable(rel outpath.Rel) bool {
 // browsing has to stay free — probing every entry is what made v1 take half a
 // minute to show a folder — but once someone has opened one file, a moment of
 // ffprobe is what lets the page say anything useful about it.
+// cachedInfo answers from the probe cache or not at all. It never runs
+// ffprobe, so a page that only needs to play something is never held up by it.
+func (s *Server) cachedInfo(rel outpath.Rel) (mediainfo.Info, bool) {
+	fi, err := os.Stat(s.mapper.Source(rel))
+	if err != nil {
+		return mediainfo.Info{}, false
+	}
+	return s.prober.Cached(s.mapper.Source(rel), fi)
+}
+
 func (s *Server) inspect(ctx context.Context, rel outpath.Rel) (mediainfo.Info, bool) {
 	src := s.mapper.Source(rel)
 	fi, err := os.Stat(src)
@@ -503,6 +526,40 @@ func displayName(rel outpath.Rel) string {
 		return "라이브러리"
 	}
 	return rel.Base()
+}
+
+// handleDiscard removes a conversion so it can be made again — the subtitles
+// were the wrong ones, the sync was off, the picture was worse than expected.
+// Only the output is touched; the source is in a read-only mount and could not
+// be reached from here even if this were wrong.
+func (s *Server) handleDiscard(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.fail(w, http.StatusBadRequest, "요청을 읽을 수 없습니다")
+		return
+	}
+	rel, err := s.mapper.ParseRel(r.FormValue("rel"))
+	if err != nil || rel.IsRoot() {
+		s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
+		return
+	}
+
+	// Deleting the output from under a running ffmpeg would leave it writing
+	// to a file nobody can find, and the rename at the end would put the old
+	// name back anyway.
+	if v, ok := s.queue.ByRel(rel); ok && !v.State.Terminal() {
+		s.fail(w, http.StatusConflict,
+			"지금 변환 중인 파일입니다. 먼저 변환을 중단한 뒤 지우세요.")
+		return
+	}
+
+	if err := os.Remove(s.mapper.Output(rel)); err != nil && !os.IsNotExist(err) {
+		s.fail(w, http.StatusInternalServerError, "지우지 못했습니다: "+err.Error())
+		return
+	}
+	log.Printf("discarded conversion: %s", rel.String())
+
+	// Back to the same page, which now offers to convert it again.
+	http.Redirect(w, r, (&url.URL{Path: "/watch/" + rel.String()}).String(), http.StatusSeeOther)
 }
 
 func redirectBack(w http.ResponseWriter, r *http.Request, def string) {
