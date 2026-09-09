@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -23,6 +24,29 @@ import (
 	"nvt/ver2/internal/subs"
 	"nvt/ver2/internal/web"
 )
+
+// version is stamped at build time (-X main.version=...). It answers "is the
+// container running the code I just pushed?", which is not a question the
+// behaviour on screen can be trusted to answer.
+var version = "dev"
+
+// buildVersion prefers the stamp and falls back to whatever the toolchain
+// recorded, so a plain "go build" still says something useful.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" {
+			return s.Value
+		}
+	}
+	return version
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
@@ -100,6 +124,7 @@ func main() {
 		// that stay open for hours.
 	}
 
+	log.Printf("build %s", buildVersion())
 	log.Printf("source=%s output=%s state=%s listen=%s",
 		cfg.SourceDir, cfg.OutputDir, cfg.StateDir, cfg.Listen)
 	if cfg.OutputRel != "" {

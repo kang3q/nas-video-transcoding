@@ -5,7 +5,12 @@ RUN go mod download
 # Only ver2 enters the build context, so editing frozen v1 code cannot
 # invalidate this layer.
 COPY ver2 ./ver2
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nvtweb ./ver2/cmd/nvtweb
+# Which build is running is a question that has already blocked a diagnosis:
+# a fix was pushed, the container was not rebuilt, and the old behaviour was
+# read as the fix not working. The commit is stamped in so the log can say.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION}" -o /out/nvtweb ./ver2/cmd/nvtweb
 
 FROM alpine:3.20
 RUN apk add --no-cache ffmpeg ca-certificates tzdata
