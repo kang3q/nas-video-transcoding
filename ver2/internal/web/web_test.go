@@ -218,7 +218,9 @@ func TestBrowseRejectsEncodedTraversal(t *testing.T) {
 func TestBrowseLiteralTraversalIsCleanedAway(t *testing.T) {
 	e := newEnv(t, false, "a.mkv")
 	rec := get(t, e.h, "/browse/../../etc")
-	if rec.Code != http.StatusTemporaryRedirect {
+	// Which 3xx ServeMux picks for a cleaned path has changed between Go
+	// releases; that it redirects away is the part that matters.
+	if rec.Code < 300 || rec.Code >= 400 {
 		t.Fatalf("status = %d, want a redirect from path cleaning", rec.Code)
 	}
 	if loc := rec.Header().Get("Location"); loc != "/etc" {

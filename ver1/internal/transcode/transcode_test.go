@@ -18,7 +18,12 @@ import (
 func fakeFFmpeg(t *testing.T, seconds string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ffmpeg")
-	body := "#!/bin/sh\nfor a in \"$@\"; do out=\"$a\"; done\n: > \"$out\"\nsleep " + seconds + "\n"
+	// "exec sleep" matters. Without it a shell like dash forks a child that
+	// inherits the stderr pipe, and killing the shell leaves that child
+	// holding it open — cmd.Wait then blocks for the full sleep, which looks
+	// exactly like cancellation not working. Real ffmpeg forks nothing, so
+	// the fake should not either.
+	body := "#!/bin/sh\nfor a in \"$@\"; do out=\"$a\"; done\n: > \"$out\"\nexec sleep " + seconds + "\n"
 	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
