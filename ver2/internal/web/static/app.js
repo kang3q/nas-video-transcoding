@@ -4,6 +4,63 @@
 (function () {
   var fallback = null;
 
+  // Safari and iOS play HLS natively, so hls.js is only fetched where it is
+  // actually needed — it is 415KB.
+  function loadHls() {
+    return new Promise(function (resolve, reject) {
+      if (window.Hls) return resolve(window.Hls);
+      var s = document.createElement("script");
+      s.src = "/static/vendor/hls-1.5.20.min.js";
+      s.onload = function () { resolve(window.Hls); };
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  // A job still encoding is watched over HLS. The playlist is an EVENT
+  // playlist, so it grows as segments land and seeking works anywhere already
+  // written; when the encode ends ffmpeg writes the end marker and the player
+  // switches to a normal recording on its own.
+  document.querySelectorAll("video[data-hls]").forEach(function (video) {
+    var url = video.getAttribute("data-hls");
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = url;
+      return;
+    }
+    loadHls().then(function (Hls) {
+      if (!Hls || !Hls.isSupported()) return;
+      var hls = new Hls({
+        lowLatencyMode: false,
+        backBufferLength: Infinity, // scrub back over everything encoded so far
+        manifestLoadingMaxRetry: 8, // the playlist lags the first segments
+        levelLoadingMaxRetry: 8,
+      });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR, function (_, data) {
+        // Running out of buffer means the encoder is behind, not that
+        // playback has failed. Wait rather than tearing the player down.
+        if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) hls.startLoad();
+      });
+    }).catch(function () {});
+  });
+
+  // Count down to the point where playback can run to the end without
+  // overtaking the encoder.
+  document.querySelectorAll(".j-ready[data-ready]").forEach(function (el) {
+    var left = parseFloat(el.getAttribute("data-ready"));
+    if (!(left > 0)) return;
+    var tick = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(tick);
+        el.textContent = "지금부터 끝까지 끊김 없이 볼 수 있습니다.";
+        return;
+      }
+      el.textContent = "약 " + fmtDur(left) + " 뒤부터는 끝까지 볼 수 있습니다.";
+    }, 1000);
+  });
+
   function fmtPct(p) { return p < 0 ? "—" : Math.round(p * 100) + "%"; }
   function fmtRate(r) { return r > 0 ? r.toFixed(2) + "x" : "—"; }
 

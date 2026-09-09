@@ -110,6 +110,10 @@ type View struct {
 	Elapsed  float64 `json:"elapsed_sec"`
 	Error    string  `json:"error,omitempty"`
 	Live     bool    `json:"live"`
+	// ReadyInSec is how much longer to wait before playback can run to the
+	// end without overtaking the encoder. 0 means now, -1 means not yet
+	// knowable. Only meaningful while the job is running.
+	ReadyInSec float64 `json:"ready_in_sec"`
 }
 
 func (j *Job) View() View {
@@ -124,11 +128,24 @@ func (j *Job) View() View {
 		Percent: ffmpeg.Percent(j.out, j.duration, j.state == Done),
 		ETASec:  -1,
 	}
+	v.ReadyInSec = -1
 	if j.speed != nil {
 		v.Rate = j.speed.Rate()
 		if eta := j.speed.ETA(j.out, j.duration); eta > 0 {
 			v.ETASec = eta.Seconds()
 		}
+		// Playback consumes one second of video per second; the encoder makes
+		// Rate of them. Below realtime the difference has to be banked first.
+		if head := ffmpeg.HeadStart(j.duration, v.Rate); head >= 0 {
+			left := head.Seconds() - time.Since(j.startedAt).Seconds()
+			if left < 0 {
+				left = 0
+			}
+			v.ReadyInSec = left
+		}
+	}
+	if j.state == Done {
+		v.ReadyInSec = 0
 	}
 	switch {
 	case j.state == Queued:
@@ -174,13 +191,14 @@ type Prober interface {
 }
 
 type Queue struct {
-	mapper    *outpath.Mapper
-	prober    Prober
-	runner    ffmpeg.Runner
-	subtitles SubResolver
-	settings  ffmpeg.Settings
-	workers   int
-	liveRoot  string
+	mapper      *outpath.Mapper
+	prober      Prober
+	runner      ffmpeg.Runner
+	subtitles   SubResolver
+	settings    ffmpeg.Settings
+	workers     int
+	liveRoot    string
+	segmentSecs int
 	// checkpointAt is the fraction of the first file in a batch to reach
 	// before asking whether the result looks right. Far enough in that an
 	// opening sequence is over and burned-in subtitles are on screen.
@@ -208,6 +226,7 @@ type Deps struct {
 	Settings     ffmpeg.Settings
 	Workers      int
 	LiveRoot     string
+	SegmentSecs  int
 	CheckpointAt float64
 }
 
@@ -221,7 +240,7 @@ func NewQueue(d Deps) *Queue {
 	q := &Queue{
 		mapper: d.Mapper, prober: d.Prober, runner: d.Runner, subtitles: d.Subs,
 		settings: d.Settings, workers: d.Workers,
-		liveRoot: d.LiveRoot, checkpointAt: d.CheckpointAt,
+		liveRoot: d.LiveRoot, segmentSecs: d.SegmentSecs, checkpointAt: d.CheckpointAt,
 		jobs: map[string]*Job{}, batches: map[string]*Batch{},
 		running: map[string]*Job{}, byOutput: map[string]string{},
 		wake: make(chan struct{}, 1),
@@ -447,6 +466,19 @@ func (q *Queue) BatchView(id string) (BatchView, bool) {
 	return v, true
 }
 
+// LiveDirFor returns where a running job is writing its HLS rendition, or ""
+// when it has none. Used to decide whether to offer a player for something
+// that is still being made.
+func (q *Queue) LiveDirFor(id string) string {
+	q.mu.Lock()
+	j, ok := q.jobs[id]
+	q.mu.Unlock()
+	if !ok || j.State().Terminal() {
+		return ""
+	}
+	return j.LiveDir()
+}
+
 // ByRel finds the newest job for a file, so a listing can show its state.
 func (q *Queue) ByRel(rel outpath.Rel) (View, bool) {
 	q.mu.Lock()
@@ -648,13 +680,14 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 
 	return ffmpeg.Spec{
 		Src: j.src, Dst: j.part,
-		Remux:      remux,
-		VideoIndex: video.Index,
-		AudioIndex: audioIdx,
-		BurnSubs:   burn,
-		Width:      video.Width,
-		Height:     video.Height,
-		LiveDir:    j.liveDir,
+		Remux:       remux,
+		VideoIndex:  video.Index,
+		AudioIndex:  audioIdx,
+		BurnSubs:    burn,
+		Width:       video.Width,
+		Height:      video.Height,
+		LiveDir:     j.liveDir,
+		SegmentSecs: q.segmentSecs,
 	}, cleanup, nil
 }
 

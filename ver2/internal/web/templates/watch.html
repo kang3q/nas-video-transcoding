@@ -9,7 +9,22 @@
   <p class="meta"><a href="{{.MediaURL}}" download>파일 내려받기</a></p>
 {{else if .Job}}
   <section class="job {{.Job.State}}" data-job="{{.Job.ID}}">
-    <p class="meta">아직 변환 중입니다. 완료되면 이 자리에서 재생할 수 있습니다.</p>
+    {{if .LiveURL}}
+      <video controls playsinline data-hls="{{.LiveURL}}"></video>
+      <p class="meta j-ready" data-ready="{{.Job.ReadyInSec}}">
+        {{if gt .Job.ReadyInSec 0.0}}
+          지금 재생하면 인코더를 따라잡습니다. 약 {{dur .Job.ReadyInSec}} 뒤부터는 끝까지 볼 수 있습니다.
+        {{else}}
+          지금부터 끝까지 끊김 없이 볼 수 있습니다.
+        {{end}}
+      </p>
+      <p class="hint">
+        변환 중인 화면입니다. 이미 만들어진 구간 안에서는 되감기도 됩니다.
+        완성되면 이 페이지에서 원본 화질의 MP4 로 바뀝니다.
+      </p>
+    {{else}}
+      <p class="meta">아직 변환 중입니다. 완료되면 이 자리에서 재생할 수 있습니다.</p>
+    {{end}}
     <div class="bar"><span style="width: {{pctwidth .Job.Percent}}"></span></div>
     <div class="meta">
       <span class="j-pct">{{pct .Job.Percent}}</span>
@@ -31,6 +46,9 @@
   <h2>변환</h2>
   <form method="post" action="/convert">
     <input type="hidden" name="rel" value="{{.Rel}}">
+    {{if .LiveOn}}
+    <label><input type="checkbox" name="nolive" value="1"> 변환 중 미리보기 만들지 않기 (디스크 절약)</label>
+    {{end}}
     {{if .Subs}}
     <label>자막 굽기
       <select name="subs">

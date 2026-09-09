@@ -71,6 +71,7 @@ func main() {
 		},
 		Workers:      cfg.Workers,
 		LiveRoot:     liveRoot,
+		SegmentSecs:  cfg.SegmentSecs,
 		CheckpointAt: float64(cfg.CheckpointPercent) / 100,
 	})
 
@@ -95,6 +96,7 @@ func main() {
 	}
 	log.Printf("workers=%d threads=%d preset=%s v=%s a=%s checkpoint=%d%%",
 		cfg.Workers, cfg.Threads, cfg.Preset, cfg.VideoBitrate, cfg.AudioBitrate, cfg.CheckpointPercent)
+	log.Printf("live preview=%v segment=%ds", cfg.Live, cfg.SegmentSecs)
 
 	go flushPeriodically(prober)
 

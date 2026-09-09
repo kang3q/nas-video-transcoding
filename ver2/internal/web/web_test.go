@@ -106,7 +106,7 @@ func newEnv(t *testing.T, blocking bool, files ...string) *env {
 
 	q := jobs.NewQueue(jobs.Deps{
 		Mapper: m, Prober: prober, Runner: runner, Workers: 1,
-		LiveRoot: filepath.Join(state, "live"), CheckpointAt: 0.10,
+		LiveRoot: filepath.Join(state, "live"), SegmentSecs: 4, CheckpointAt: 0.10,
 	})
 	if blocking {
 		// Cleanups run last-registered first, so this fires before the
@@ -134,7 +134,10 @@ func newEnv(t *testing.T, blocking bool, files ...string) *env {
 		})
 	}
 
-	cfg := &config.Config{OutputDir: out, SourceDir: src, StateDir: state}
+	cfg := &config.Config{
+		OutputDir: out, SourceDir: src, StateDir: state,
+		Live: true, SegmentSecs: 4,
+	}
 	s, err := New(cfg, m, library.New(m), q, prober, subs.NewFinder(m, prober))
 	if err != nil {
 		t.Fatal(err)
@@ -491,5 +494,126 @@ func TestCrumbs(t *testing.T) {
 	got := crumbs("애니/코난")
 	if len(got) != 3 || got[0].Path != "" || got[2].Path != "애니/코난" {
 		t.Errorf("crumbs = %+v", got)
+	}
+}
+
+// --- live preview ---
+
+func TestLiveFileNames(t *testing.T) {
+	for _, ok := range []string{"index.m3u8", "init.mp4", "seg00001.m4s"} {
+		if !liveFile(ok) {
+			t.Errorf("liveFile(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{
+		"../../etc/passwd", "a/b.m4s", `..\x`, "index.m3u8.bak",
+		"seg.txt", "", "..", "secret.mp4",
+	} {
+		if liveFile(bad) {
+			t.Errorf("liveFile(%q) = true, want false", bad)
+		}
+	}
+}
+
+func TestIsHex(t *testing.T) {
+	if !isHex("dc344c4937f9a231") {
+		t.Error("a job id was rejected")
+	}
+	for _, bad := range []string{"", "../x", "zz", strings.Repeat("a", 65)} {
+		if isHex(bad) {
+			t.Errorf("isHex(%q) = true", bad)
+		}
+	}
+}
+
+// Nothing is served for a job that is not running: the directory is gone, and
+// asking after one is how a stale page probes for files.
+func TestLiveRefusesUnknownJobs(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	for _, p := range []string{
+		"/live/deadbeef/index.m3u8",
+		"/live/notahexid/index.m3u8",
+		"/live/deadbeef/../../../etc/passwd",
+	} {
+		if rec := get(t, e.h, p); rec.Code == http.StatusOK {
+			t.Errorf("GET %s returned 200", p)
+		}
+	}
+}
+
+// The playlist grows while the job runs, so caching it would freeze playback
+// at whatever was written when it was first fetched.
+func TestLiveServesThePlaylistUncached(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+	post(t, e.h, "/convert", url.Values{"rel": {"a.mkv"}, "scope": {"file"}})
+
+	var id string
+	waitFor(t, "the job to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Running && v.Live {
+				id = v.ID
+				return e.srv.queue.LiveDirFor(id) != ""
+			}
+		}
+		return false
+	})
+
+	// Stand in for the HLS muxer. A browser asking before ffmpeg has written
+	// anything gets a 404 and retries, which is why the player is configured
+	// to be patient with the first playlist load.
+	dir := e.srv.queue.LiveDirFor(id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := get(t, e.h, "/live/"+id+"/index.m3u8")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "mpegurl") {
+		t.Errorf("Content-Type = %q", got)
+	}
+
+	// Segments never change once written, so they may be cached forever.
+	if err := os.WriteFile(filepath.Join(dir, "seg00001.m4s"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec = get(t, e.h, "/live/"+id+"/seg00001.m4s")
+	if !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") {
+		t.Errorf("segment Cache-Control = %q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestWatchOffersTheLivePlayerWhileEncoding(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+	post(t, e.h, "/convert", url.Values{"rel": {"a.mkv"}, "scope": {"file"}})
+	waitFor(t, "the job to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Running {
+				return e.srv.queue.LiveDirFor(v.ID) != ""
+			}
+		}
+		return false
+	})
+
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, "data-hls=\"/live/") {
+		t.Errorf("no live player while the job is running:\n%s", body)
+	}
+}
+
+func TestVendoredHLSIsServed(t *testing.T) {
+	e := newEnv(t, false)
+	rec := get(t, e.h, "/static/vendor/hls-1.5.20.min.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: the player cannot load without it", rec.Code)
+	}
+	if rec.Body.Len() < 100000 {
+		t.Errorf("served %d bytes, that is not hls.js", rec.Body.Len())
 	}
 }

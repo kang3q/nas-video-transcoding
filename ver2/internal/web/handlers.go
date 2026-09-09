@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -74,6 +75,8 @@ type watchData struct {
 	Job       *jobs.View
 	BatchID   string
 	Subs      []subs.Track
+	LiveURL   string
+	LiveOn    bool
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +101,11 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		jv := v
 		data.Job = &jv
 		data.BatchID = v.BatchID
+		if v.State == jobs.Running && v.Live && s.queue.LiveDirFor(v.ID) != "" {
+			data.LiveURL = "/live/" + v.ID + "/index.m3u8"
+		}
 	}
+	data.LiveOn = s.cfg.Live
 	data.Subs = s.subtitleTracks(r, rel)
 
 	s.render(w, "watch", rel.Base(), "browse", data)
@@ -124,6 +131,61 @@ func (s *Server) subtitleTracks(r *http.Request, rel outpath.Rel) []subs.Track {
 	return s.subs.Find(rel)
 }
 
+// handleLive serves the HLS rendition of a job that is still encoding.
+//
+// The path is /live/<job id>/<file>. The job id is ours — hex, from the queue
+// — so it is checked against the queue rather than trusted, and the filename
+// is confined to what the HLS muxer writes.
+func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/live/")
+	id, file, ok := strings.Cut(rest, "/")
+	if !ok || !isHex(id) || !liveFile(file) {
+		http.NotFound(w, r)
+		return
+	}
+	dir := s.queue.LiveDirFor(id)
+	if dir == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// The playlist grows as segments appear, so it must never be cached.
+	// Segments never change once written, so they always can be.
+	if strings.HasSuffix(file, ".m3u8") {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	http.ServeFile(w, r, filepath.Join(dir, file))
+}
+
+func isHex(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
+}
+
+// liveFile allows only the names the HLS muxer produces.
+func liveFile(name string) bool {
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return false
+	}
+	switch {
+	case name == "index.m3u8", name == "init.mp4":
+		return true
+	case strings.HasPrefix(name, "seg") && strings.HasSuffix(name, ".m4s"):
+		return true
+	}
+	return false
+}
+
 // handleConvert is the one action in the whole interface. It says which file
 // was picked and how far around the directory to go; everything else follows.
 func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +208,7 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
 
 	picked := r.FormValue("subs")
 	opts := jobs.Options{
-		Live:             r.FormValue("live") != "",
+		Live:             s.cfg.Live && r.FormValue("nolive") == "",
 		Subtitles:        picked != "",
 		PickedSubtitleID: picked,
 	}

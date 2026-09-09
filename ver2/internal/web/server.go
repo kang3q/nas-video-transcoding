@@ -95,10 +95,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs", s.handleAPIJobs)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 
-	// Finished output only. A .part has no index and cannot be played; the
-	// live path for an unfinished job is HLS, served separately.
+	// Finished output only. A .part has no index and cannot be played; a job
+	// still running is watched over HLS instead, below.
 	mux.Handle("GET /media/", http.StripPrefix("/media/",
 		http.FileServer(http.Dir(s.cfg.OutputDir))))
+	mux.HandleFunc("GET /live/", s.handleLive)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

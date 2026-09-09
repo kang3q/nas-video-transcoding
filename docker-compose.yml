@@ -14,3 +14,4 @@ services:
       TZ: Asia/Seoul
       NVT2_WORKERS: "1"
       NVT2_THREADS: "3"
+      NVT2_LIVE: "true"

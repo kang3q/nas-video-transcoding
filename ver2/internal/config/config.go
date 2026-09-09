@@ -45,6 +45,11 @@ type Config struct {
 	// sequence that burned-in subtitles are actually on screen.
 	CheckpointPercent int
 
+	// Live writes an HLS rendition alongside the MP4 so a job can be watched
+	// before it finishes. One encode feeds both, so the cost is disk, not CPU.
+	Live        bool
+	SegmentSecs int
+
 	TelegramToken string
 	TelegramChat  string
 	PublicBaseURL string // used in notifications, e.g. http://nas.local:8080
@@ -78,6 +83,8 @@ func Load() (*Config, error) {
 		AudioRate:     envInt("NVT2_AUDIO_RATE", 48000),
 
 		CheckpointPercent: envInt("NVT2_CHECKPOINT_PERCENT", 10),
+		Live:              envBool("NVT2_LIVE", true),
+		SegmentSecs:       envInt("NVT2_SEGMENT_SEC", 4),
 
 		TelegramToken: env("NVT2_TELEGRAM_TOKEN", ""),
 		TelegramChat:  env("NVT2_TELEGRAM_CHAT_ID", ""),
@@ -95,6 +102,9 @@ func Load() (*Config, error) {
 	}
 	if c.CheckpointPercent < 1 || c.CheckpointPercent > 99 {
 		c.CheckpointPercent = 10
+	}
+	if c.SegmentSecs < 1 || c.SegmentSecs > 30 {
+		c.SegmentSecs = 4
 	}
 
 	if err := c.resolveDirs(); err != nil {
