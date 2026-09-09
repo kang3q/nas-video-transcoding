@@ -13,7 +13,13 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" -o /out/nvtweb ./ver2/cmd/nvtweb
 
 FROM alpine:3.20
-RUN apk add --no-cache ffmpeg ca-certificates tzdata
+# Fonts are not optional here. libass draws nothing at all when it cannot find
+# a face for the text — it warns and carries on, ffmpeg exits zero, and an hour
+# of encoding produces a file with no subtitles in it and no error anywhere.
+# The base image ships no fonts whatsoever, so burning Korean subtitles into a
+# picture was never going to work. Noto CJK covers Korean and Japanese, which
+# is what these files are.
+RUN apk add --no-cache ffmpeg ca-certificates tzdata fontconfig font-noto-cjk
 COPY --from=build /out/nvtweb /usr/local/bin/nvtweb
 ENV NVT2_SOURCE_DIR=/media \
     NVT2_OUTPUT_DIR=/output \

@@ -1,6 +1,10 @@
 package ffmpeg
 
 import (
+	"context"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -365,4 +369,37 @@ func TestHeadStart(t *testing.T) {
 	if got := HeadStart(ep, 0.5); got < ep || got > ep+time.Second {
 		t.Errorf("HeadStart at 0.5x = %v, want about the full duration", got)
 	}
+}
+
+// A run that succeeds can still have had something worth hearing. The one that
+// matters most here does not fail: libass warns that it found no font for the
+// text, draws nothing, and ffmpeg exits zero — an hour of encoding for a file
+// with no subtitles in it and no error anywhere to explain why.
+func TestWarningsSurviveASuccessfulRun(t *testing.T) {
+	bin := fakeFFmpeg(t, `#!/bin/sh
+echo "[Parsed_subtitles_0] fontselect: failed to find any fallback with glyph 0xAC00" >&2
+exit 0
+`)
+	var out strings.Builder
+	log.SetOutput(&out)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	e := Exec{Bin: bin}
+	if err := e.Run(context.Background(), Spec{Src: "a.mkv", Dst: "a.mp4"}, Settings{}, nil); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "fontselect") {
+		t.Errorf("the warning was thrown away: %q", out.String())
+	}
+}
+
+// fakeFFmpeg writes a script that stands in for the real binary.
+func fakeFFmpeg(t *testing.T, script string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "ffmpeg")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

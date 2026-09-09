@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -71,6 +72,15 @@ func (e Exec) Run(ctx context.Context, spec Spec, set Settings, onProgress func(
 			return ctxErr
 		}
 		return fmt.Errorf("ffmpeg: %w: %s", err, errTail.String())
+	}
+
+	// A successful run can still have had something to say, and the thing it
+	// says matters most is the one that does not fail: libass warning that it
+	// found no font for the text. ffmpeg then exits zero having drawn no
+	// subtitles at all. Keeping these to the failure path meant the one
+	// message that explained an hour of wasted encoding was thrown away.
+	if warn := errTail.String(); warn != "" {
+		log.Printf("ffmpeg warnings: %s", warn)
 	}
 	return nil
 }
