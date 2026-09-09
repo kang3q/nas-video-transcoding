@@ -1,6 +1,8 @@
 package subs
 
 import (
+	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -390,5 +392,34 @@ func TestHasHangul(t *testing.T) {
 		if got := hasHangul([]byte(tc.in)); got != tc.want {
 			t.Errorf("hasHangul(%q) = %v, want %v", tc.in, got, tc.want)
 		}
+	}
+}
+
+// What went into the picture is the thing most often wrong and the hardest to
+// check later — it is drawn into the frames, so short of watching the file
+// there is no way to tell. The log has to say.
+func TestResolveSaysWhatItBurned(t *testing.T) {
+	var out strings.Builder
+	log.SetOutput(&out)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+	if err := os.WriteFile(filepath.Join(src, "Show.ko.srt"), []byte("1\n한글\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracks := f.Find(rel(t, m, "Show.mkv"))
+	if _, ok := PickLang(tracks, "kor"); !ok {
+		t.Fatal("setup: the Korean track was not found")
+	}
+
+	// A resolver with no preparer would panic, so only the decision is
+	// exercised here — the point is the line it writes on the way through.
+	r := &Resolver{Finder: f}
+	if _, _, err := r.Resolve(context.Background(), "job1", rel(t, m, "Other.mkv"), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "no subtitles found for Other.mkv") {
+		t.Errorf("a conversion without subtitles said nothing: %q", out.String())
 	}
 }

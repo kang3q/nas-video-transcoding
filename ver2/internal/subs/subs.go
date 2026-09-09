@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -476,6 +477,7 @@ func (r *Resolver) Resolve(ctx context.Context, jobID string, rel outpath.Rel, p
 	noop := func() {}
 	tracks := r.Finder.Find(rel)
 	if len(tracks) == 0 {
+		log.Printf("no subtitles found for %s, converting without", rel.Base())
 		return "", noop, nil
 	}
 
@@ -493,10 +495,16 @@ func (r *Resolver) Resolve(ctx context.Context, jobID string, rel outpath.Rel, p
 		chosen, ok = Pick(tracks)
 	}
 	if !ok {
+		log.Printf("no usable subtitle for %s among %d track(s), converting without",
+			rel.Base(), len(tracks))
 		return "", noop, nil
 	}
 	if !chosen.Burnable() {
 		return "", noop, fmt.Errorf("subs: %s cannot be burned in", chosen.Label)
 	}
+	// Which subtitle went into the picture is the thing most often wrong and
+	// the thing hardest to check afterwards: it is drawn into the frames, so
+	// the only other way to tell is to watch the file. Say it here.
+	log.Printf("burning subtitles into %s: %s", rel.Base(), chosen.Label)
 	return r.Preparer.Prepare(ctx, jobID, rel, chosen.ID)
 }
