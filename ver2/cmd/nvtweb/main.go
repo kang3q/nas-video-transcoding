@@ -18,6 +18,7 @@ import (
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
+	"nvt/ver2/internal/notify"
 	"nvt/ver2/internal/outpath"
 	"nvt/ver2/internal/subs"
 	"nvt/ver2/internal/web"
@@ -75,6 +76,12 @@ func main() {
 		CheckpointAt: float64(cfg.CheckpointPercent) / 100,
 	})
 
+	tg := notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChat)
+	watcher := notify.NewWatcher(queue, tg, cfg.PublicBaseURL)
+	notifyCtx, stopNotify := context.WithCancel(context.Background())
+	defer stopNotify()
+	go watcher.Run(notifyCtx)
+
 	srv, err := web.New(cfg, mapper, library.New(mapper), queue, prober, subFinder)
 	if err != nil {
 		log.Fatalf("web: %v", err)
@@ -97,6 +104,14 @@ func main() {
 	log.Printf("workers=%d threads=%d preset=%s v=%s a=%s checkpoint=%d%%",
 		cfg.Workers, cfg.Threads, cfg.Preset, cfg.VideoBitrate, cfg.AudioBitrate, cfg.CheckpointPercent)
 	log.Printf("live preview=%v segment=%ds", cfg.Live, cfg.SegmentSecs)
+	if tg.Enabled() {
+		log.Printf("telegram: on, public url=%q", cfg.PublicBaseURL)
+		if cfg.PublicBaseURL == "" {
+			log.Print("telegram: NVT2_PUBLIC_URL is unset, so notifications carry no link")
+		}
+	} else {
+		log.Print("telegram: off (set NVT2_TELEGRAM_TOKEN and NVT2_TELEGRAM_CHAT_ID)")
+	}
 
 	go flushPeriodically(prober)
 
@@ -113,6 +128,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	stopNotify()
 	httpSrv.Shutdown(ctx)
 	prober.Flush()
 }

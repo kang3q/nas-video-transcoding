@@ -14,4 +14,11 @@ services:
       TZ: Asia/Seoul
       NVT2_WORKERS: "1"
       NVT2_THREADS: "3"
+      # 첫 파일이 10% 를 지나면 텔레그램으로 알리고, 거기서 나머지를 중단할 수
+      # 있습니다. 봇이 텔레그램을 주기적으로 조회하는 방식이라 포트포워딩 없이
+      # 집 밖에서도 동작합니다.
+      # NVT2_TELEGRAM_TOKEN: "123456:ABC..."
+      # NVT2_TELEGRAM_CHAT_ID: "123456789"
+      # 알림에 넣을 웹 주소. 없으면 링크 없이 글만 갑니다.
+      # NVT2_PUBLIC_URL: "http://192.168.0.10:8081"
       NVT2_LIVE: "true"
