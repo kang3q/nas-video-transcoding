@@ -825,3 +825,69 @@ func TestJobsListLinksToTheDetailPage(t *testing.T) {
 		t.Error("a running job offers no way to look at it")
 	}
 }
+
+// --- the subtitle choice ---
+
+// checkedFor reports whether the radio with this value is the one selected.
+func checkedFor(t *testing.T, body, value string) bool {
+	t.Helper()
+	i := strings.Index(body, `value="`+value+`"`)
+	if i < 0 {
+		t.Fatalf("no radio with value %q:\n%s", value, body)
+	}
+	end := strings.Index(body[i:], ">")
+	if end < 0 {
+		t.Fatalf("unterminated input tag for %q", value)
+	}
+	return strings.Contains(body[i:i+end], "checked")
+}
+
+// Burning is irreversible and costs a full re-encode to find out about, so the
+// form starts on the language this library is actually watched with, and on
+// nothing at all when that language is absent.
+func TestSubtitleDefaultFollowsKorean(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+
+	// The probe stub offers English and a Japanese bitmap track — no Korean.
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if !checkedFor(t, body, "") {
+		t.Errorf("with no Korean track, burning should be off:\n%s", body)
+	}
+	if checkedFor(t, body, "embedded:2") {
+		t.Error("an English track was selected for burning by default")
+	}
+	if !strings.Contains(body, `type="radio"`) {
+		t.Error("the subtitle choice is not a radio group")
+	}
+
+	// A Korean sidecar appears beside the video.
+	if err := os.WriteFile(filepath.Join(e.src, "a.ko.srt"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if !checkedFor(t, body, "sidecar:a.ko.srt") {
+		t.Errorf("the Korean track was not chosen:\n%s", body)
+	}
+	if checkedFor(t, body, "") {
+		t.Error("burning stayed off even though there is a Korean track")
+	}
+}
+
+// A bitmap track can only be drawn with an overlay filter, which is not wired
+// up, so it must not be selectable — and never the default.
+func TestBitmapSubtitleCannotBeChosen(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+
+	i := strings.Index(body, `value="embedded:3"`)
+	if i < 0 {
+		t.Fatalf("the bitmap track is missing from the list:\n%s", body)
+	}
+	tag := body[i : i+strings.Index(body[i:], ">")]
+	if !strings.Contains(tag, "disabled") {
+		t.Errorf("the bitmap track is selectable: %s", tag)
+	}
+	if strings.Contains(tag, "checked") {
+		t.Errorf("the bitmap track was chosen by default: %s", tag)
+	}
+}

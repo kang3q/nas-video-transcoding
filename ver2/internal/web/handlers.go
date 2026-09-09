@@ -83,8 +83,15 @@ type watchData struct {
 	Job       *jobs.View
 	BatchID   string
 	Subs      []subs.Track
-	LiveURL   string
-	LiveOn    bool
+
+	// DefaultSub is the track the form starts on, empty meaning "굽지 않음".
+	// Korean is chosen because it is what this library is watched with; any
+	// other language is left switched off, since burning the wrong subtitles
+	// cannot be undone and costs a full re-encode to discover.
+	DefaultSub string
+
+	LiveURL string
+	LiveOn  bool
 
 	// PlaysAsIs means the source is already H.264 + AAC in an MP4. There is
 	// nothing to convert; it is simply played.
@@ -131,6 +138,9 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data.Subs = s.subs.Find(rel)
+	if t, ok := subs.PickLang(data.Subs, "kor"); ok {
+		data.DefaultSub = t.ID
+	}
 
 	s.render(w, "watch", rel.Base(), "browse", data)
 }

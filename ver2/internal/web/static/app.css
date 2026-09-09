@@ -85,3 +85,16 @@ section.convert label { display: block; margin: .5rem 0; }
   white-space: pre-wrap; word-break: break-word; font-size: .82rem;
   color: var(--danger); background: transparent; margin: .5rem 0 0;
 }
+
+/* The subtitle choice is a list of radios rather than a dropdown: burning is
+   irreversible, so which track is about to be drawn into the picture should be
+   readable without opening anything. */
+fieldset.subs {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem 0.8rem;
+  margin: 0 0 0.8rem;
+}
+fieldset.subs legend { padding: 0 0.4rem; font-weight: 600; }
+fieldset.subs label { display: block; margin: 0.35rem 0; cursor: pointer; }
+fieldset.subs label.off { opacity: 0.5; cursor: not-allowed; }

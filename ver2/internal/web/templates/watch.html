@@ -70,16 +70,28 @@
     <label><input type="checkbox" name="nolive" value="1"> 변환 중 미리보기 만들지 않기 (디스크 절약)</label>
     {{end}}
     {{if .Subs}}
-    <label>자막 굽기
-      <select name="subs">
-        <option value="">굽지 않음</option>
-        {{range .Subs}}<option value="{{.ID}}" {{if not .Burnable}}disabled{{end}}>{{.Label}}</option>{{end}}
-      </select>
-    </label>
+    <fieldset class="subs">
+      <legend>자막 굽기</legend>
+      <label><input type="radio" name="subs" value="" {{if not .DefaultSub}}checked{{end}}> 굽지 않음</label>
+      {{range .Subs}}
+        <label{{if not .Burnable}} class="off"{{end}}>
+          <input type="radio" name="subs" value="{{.ID}}"
+                 {{if not .Burnable}}disabled{{end}}
+                 {{if and $.DefaultSub (eq .ID $.DefaultSub)}}checked{{end}}>
+          {{.Label}}{{if not .Burnable}} — 그림 자막이라 구울 수 없습니다{{end}}
+        </label>
+      {{end}}
+    </fieldset>
     <p class="hint">
+      {{if .DefaultSub}}
+        한글 자막이 있어 그것으로 골라두었습니다.
+      {{else}}
+        한글 자막이 없어 <strong>굽지 않음</strong>으로 두었습니다. 다른 언어를 구우려면
+        직접 고르세요.
+      {{end}}
       구운 자막은 끌 수 없고, 영상을 다시 그려야 하므로 컨테이너만 바꾸면 될 파일도
       전체 재인코딩이 됩니다. 여러 편을 한 번에 변환하면 <strong>나머지 편은
-      한글 자막을 자동으로 골라</strong> 굽습니다.
+      고른 언어를 자동으로 찾아</strong> 굽습니다.
     </p>
     {{end}}
     <p class="hint">
