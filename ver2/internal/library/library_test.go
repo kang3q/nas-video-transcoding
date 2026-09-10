@@ -347,3 +347,83 @@ func TestListOutputHidesWhatIsNotFinished(t *testing.T) {
 		}
 	}
 }
+
+// A NAS keeps folders for itself in every share. Synology's @eaDir sits
+// beside everything it has indexed and holds thumbnails, metadata, and
+// sometimes a converted preview — a .mp4 that would otherwise turn up in the
+// list of things to watch. Inside it are directories named exactly like the
+// files they describe, so it also contains something called "Show - 01.smi"
+// that is a folder.
+func TestSystemDirectoriesAreNotLibraryContent(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "media")
+	out := filepath.Join(base, "out")
+
+	// The real files, and everything the NAS scattered around them.
+	dirs := []string{
+		filepath.Join(src, "S"),
+		filepath.Join(src, "S", "@eaDir", "ep1.mkv"),
+		filepath.Join(src, "#recycle"),
+		filepath.Join(src, ".Trashes"),
+		out,
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(src, "S", "ep1.mkv"):                          "video",
+		filepath.Join(src, "S", "ep1.smi"):                          "subs",
+		filepath.Join(src, "S", "@eaDir", "ep1.mkv", "preview.mp4"): "synology's own",
+		filepath.Join(src, "S", "@eaDir", "SYNOPHOTO_THUMB_XL.jpg"): "thumbnail",
+		filepath.Join(src, "#recycle", "deleted.mkv"):               "binned",
+	}
+	for p, body := range files {
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m, err := outpath.NewMapper(src, out, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	lib := New(m)
+
+	top, err := lib.List(outpath.Rel{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range top.Entries {
+		if e.Name != "S" {
+			t.Errorf("the listing shows %q, which is the NAS's own", e.Name)
+		}
+	}
+
+	dir, err := m.ParseRel("S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := lib.List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range listing.Entries {
+		if e.Name == "@eaDir" {
+			t.Error("@eaDir is offered as a folder to browse into")
+		}
+	}
+
+	// And the walk must not find Synology's preview and offer it as
+	// something to watch.
+	for _, e := range lib.WalkVideos(outpath.Rel{}) {
+		if strings.Contains(e.Rel.String(), "@eaDir") {
+			t.Errorf("the walk descended into @eaDir and found %q", e.Rel.String())
+		}
+		if strings.Contains(e.Rel.String(), "#recycle") {
+			t.Errorf("the walk offered something from the recycle bin: %q", e.Rel.String())
+		}
+	}
+}

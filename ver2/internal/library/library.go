@@ -27,6 +27,32 @@ var videoExt = map[string]bool{
 
 func IsVideo(r outpath.Rel) bool { return videoExt[r.Ext()] }
 
+// systemDirs are the folders a NAS keeps for itself, scattered through every
+// share. Synology puts an @eaDir beside everything it has indexed, holding
+// thumbnails, metadata, and sometimes a converted preview of the video — a
+// .mp4 that would otherwise turn up in the list of things to watch. Inside
+// it are directories named exactly like the files they describe, so an
+// @eaDir also contains something called "Show - 01.smi" that is a folder.
+//
+// None of it belongs to the person browsing their library.
+var systemDirs = map[string]bool{
+	"@eaDir":                    true, // Synology: thumbnails, metadata, previews
+	"#recycle":                  true, // Synology: the share's recycle bin
+	"@tmp":                      true,
+	"@Recently-Snapshot":        true,
+	".@__thumb":                 true, // QNAP
+	"$RECYCLE.BIN":              true, // left behind by Windows clients
+	"System Volume Information": true,
+	".Trashes":                  true, // left behind by macOS clients
+	".Spotlight-V100":           true,
+	".fseventsd":                true,
+}
+
+// skip reports whether a directory entry is none of the viewer's business.
+func skip(name string) bool {
+	return strings.HasPrefix(name, ".") || systemDirs[name]
+}
+
 type Entry struct {
 	Name    string
 	Rel     outpath.Rel
@@ -60,7 +86,7 @@ func (l *Library) List(dir outpath.Rel) (Listing, error) {
 	out := make([]Entry, 0, len(ents))
 	for _, de := range ents {
 		name := de.Name()
-		if strings.HasPrefix(name, ".") {
+		if skip(name) {
 			continue
 		}
 		rel, err := l.m.Join(dir, name)
@@ -105,7 +131,7 @@ func (l *Library) ListOutput(dir outpath.Rel) (Listing, error) {
 	out := make([]Entry, 0, len(ents))
 	for _, de := range ents {
 		name := de.Name()
-		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".part") {
+		if skip(name) || strings.HasSuffix(name, ".part") {
 			continue
 		}
 		if dir.IsRoot() && name == airplayDir {
