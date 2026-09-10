@@ -206,8 +206,17 @@ func (f *Finder) sidecars(rel outpath.Rel) []Track {
 				ID: "sidecar:" + r.String(), Kind: Sidecar,
 				File: name, Codec: strings.TrimPrefix(strings.ToLower(path.Ext(name)), "."),
 			}
+			// A ".sub" is two unrelated formats sharing an extension.
+			// MicroDVD is text and converts like any other; VobSub is a
+			// pair of files holding bitmap images, which cannot become a
+			// text track at all and needs a different filter to draw. It
+			// has to be recognised here or the conversion fails an hour
+			// later with nothing useful said.
+			if t.Bitmap = f.isBitmapSidecar(r, searchDir, stem); t.Bitmap {
+				t.Codec = "vobsub"
+			}
 			t.Lang = langFromName(stem, base)
-			if t.Lang == "" && f.sniffKorean(r) {
+			if t.Lang == "" && !t.Bitmap && f.sniffKorean(r) {
 				t.Lang = "kor"
 			}
 			t.Label = label(t)
@@ -223,6 +232,37 @@ func (f *Finder) sidecars(rel outpath.Rel) []Track {
 		}
 	}
 	return out
+}
+
+// isBitmapSidecar reports whether a ".sub" is VobSub rather than MicroDVD.
+//
+// The two share an extension and have nothing else in common. MicroDVD is
+// lines of text, each prefixed with the frame it starts and ends on.
+// VobSub is the subtitle stream lifted straight off a DVD: bitmap images,
+// with the timings and palette in a separate ".idx" beside it. There is no
+// text in it to extract, and drawing it needs an overlay rather than libass.
+//
+// The .idx settles it when there is one, and the bytes settle it when there
+// is not — MicroDVD begins with "{".
+func (f *Finder) isBitmapSidecar(r outpath.Rel, dir outpath.Rel, stem string) bool {
+	if r.Ext() != ".sub" {
+		return false
+	}
+	if idx, err := f.mapper.Join(dir, stem+".idx"); err == nil {
+		if _, err := f.mapper.Stat(idx); err == nil {
+			return true
+		}
+	}
+	fh, err := f.mapper.Open(r)
+	if err != nil {
+		return false
+	}
+	defer fh.Close()
+	head := make([]byte, 16)
+	n, _ := fh.Read(head)
+	// MicroDVD's first character is the opening brace of a frame number.
+	// Anything else at the start of a .sub is not text we can read.
+	return !bytes.Contains(head[:n], []byte("{"))
 }
 
 // sniffKorean reads the subtitle and looks for Hangul.
@@ -308,7 +348,11 @@ func label(t Track) string {
 		b.WriteString(" · 한글")
 	}
 	if t.Bitmap {
-		b.WriteString(" (그림 자막 — 굽기 불가)")
+		if t.Codec == "vobsub" {
+			b.WriteString(" (VobSub — 그림이라 넣을 수 없습니다)")
+		} else {
+			b.WriteString(" (그림 자막 — 넣을 수 없습니다)")
+		}
 	}
 	return b.String()
 }

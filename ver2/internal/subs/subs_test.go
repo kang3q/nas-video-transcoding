@@ -82,7 +82,7 @@ func TestFindEmbedded(t *testing.T) {
 	if got[2].Burnable() {
 		t.Error("a bitmap track was reported as burnable")
 	}
-	if !strings.Contains(got[2].Label, "굽기 불가") {
+	if !strings.Contains(got[2].Label, "넣을 수 없습니다") {
 		t.Errorf("the label does not explain why: %q", got[2].Label)
 	}
 	if got[0].ID != "embedded:2" {
@@ -569,5 +569,79 @@ func TestToUTF8LeavesSingleByteTextAlone(t *testing.T) {
 	ascii := []byte("1\n00:00:01,000 --> 00:00:02,000\nI'll take a potato chip.\n")
 	if _, ok := utf16Encoding(ascii); ok {
 		t.Error("plain ASCII was taken for UTF-16")
+	}
+}
+
+// ".sub" is two unrelated formats sharing an extension. MicroDVD is text and
+// converts like any other. VobSub is the subtitle stream lifted off a DVD —
+// bitmap images, with the timings in a ".idx" beside it — and there is no
+// text in it to extract. Recognising it here is the difference between
+// saying so now and failing an hour into an encode.
+func TestVobSubIsRecognisedAndMicroDVDIsNot(t *testing.T) {
+	t.Run("with an .idx beside it", func(t *testing.T) {
+		f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+		write(t, filepath.Join(src, "Show.sub"), "\x00\x00\x01\xba binary rubbish")
+		write(t, filepath.Join(src, "Show.idx"), "# VobSub index file")
+
+		tracks := f.Find(rel(t, m, "Show.mkv"))
+		if len(tracks) != 1 {
+			t.Fatalf("got %d tracks: %+v", len(tracks), tracks)
+		}
+		if !tracks[0].Bitmap {
+			t.Errorf("VobSub was taken for text: %+v", tracks[0])
+		}
+		if tracks[0].Burnable() {
+			t.Error("it is offered as something that can be used")
+		}
+		if !strings.Contains(tracks[0].Label, "VobSub") {
+			t.Errorf("the label does not say what it is: %q", tracks[0].Label)
+		}
+	})
+
+	t.Run("without an .idx, judged by its bytes", func(t *testing.T) {
+		f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+		write(t, filepath.Join(src, "Show.sub"), "\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01")
+
+		tracks := f.Find(rel(t, m, "Show.mkv"))
+		if len(tracks) != 1 || !tracks[0].Bitmap {
+			t.Errorf("binary .sub was taken for text: %+v", tracks)
+		}
+	})
+
+	t.Run("MicroDVD is text and stays usable", func(t *testing.T) {
+		f, m, src := newFinder(t, mediainfo.Info{}, "Show.mkv")
+		write(t, filepath.Join(src, "Show.sub"), "{0}{100}류크, 사과 줄까?\n{101}{200}두 번째\n")
+
+		tracks := f.Find(rel(t, m, "Show.mkv"))
+		if len(tracks) != 1 {
+			t.Fatalf("got %d tracks", len(tracks))
+		}
+		if tracks[0].Bitmap {
+			t.Errorf("MicroDVD was taken for a picture: %+v", tracks[0])
+		}
+		if !tracks[0].Korean() {
+			t.Errorf("the Korean text was not noticed: %+v", tracks[0])
+		}
+	})
+}
+
+// Every extension the finder accepts has to be one ffmpeg can read as text,
+// or the offer is a lie.
+func TestEveryAcceptedExtensionIsText(t *testing.T) {
+	// .sub is the exception, and it is handled by looking inside rather than
+	// by the extension — see the test above.
+	for ext := range sidecarExt {
+		switch ext {
+		case ".srt", ".ass", ".ssa", ".smi", ".sami", ".vtt", ".sub":
+		default:
+			t.Errorf("%s is accepted but nothing says how it is read", ext)
+		}
+	}
+}
+
+func write(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

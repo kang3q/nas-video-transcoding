@@ -3,6 +3,7 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -110,4 +111,54 @@ func TestOldestAreDroppedPastTheLimit(t *testing.T) {
 	if n := len(s.Recent(0)); n > keep {
 		t.Errorf("kept %d entries, want at most %d", n, keep)
 	}
+}
+
+// Unix seconds cannot order two things watched in the same second, and an
+// unstable sort over equal keys makes the list reshuffle itself between page
+// loads. The order has to be the same every time it is asked for.
+func TestOrderIsStableWithinOneSecond(t *testing.T) {
+	s := New(t.TempDir())
+	for _, rel := range []string{"a.mkv", "b.mkv", "c.mkv", "d.mkv", "e.mkv"} {
+		s.Note(rel, rel, 100, 1400)
+	}
+
+	first := s.Recent(0)
+	if first[0].Rel != "e.mkv" {
+		t.Errorf("newest is %q, want the one watched last", first[0].Rel)
+	}
+	for range 20 {
+		again := s.Recent(0)
+		for i := range first {
+			if again[i].Rel != first[i].Rel {
+				t.Fatalf("the order changed: %v then %v", rels(first), rels(again))
+			}
+		}
+	}
+}
+
+// Entries written before the tie-breaker existed have none, and must still
+// come out in a fixed order rather than shuffling.
+func TestOldEntriesWithoutASequenceStillOrderStably(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(
+		`{"a.mkv":{"rel":"a.mkv","pos":10,"updated":100},`+
+			`"b.mkv":{"rel":"b.mkv","pos":10,"updated":100},`+
+			`"c.mkv":{"rel":"c.mkv","pos":10,"updated":100}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir)
+	first := rels(s.Recent(0))
+	for range 20 {
+		if got := rels(s.Recent(0)); got != first {
+			t.Fatalf("the order changed: %s then %s", first, got)
+		}
+	}
+}
+
+func rels(entries []Entry) string {
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Rel)
+	}
+	return strings.Join(out, ",")
 }

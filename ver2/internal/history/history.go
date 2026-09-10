@@ -22,6 +22,12 @@ type Entry struct {
 	Pos      float64 `json:"pos"`      // seconds
 	Duration float64 `json:"duration"` // seconds, 0 when unknown
 	Updated  int64   `json:"updated"`  // unix seconds
+
+	// Seq breaks ties. Unix seconds are too coarse to order two things
+	// watched in the same second, and an unstable sort over equal keys makes
+	// the list reshuffle itself between page loads. Entries written before
+	// this existed have zero and fall back to the timestamp.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // Done reports whether this was watched to the end. The last minutes of an
@@ -51,6 +57,7 @@ type Store struct {
 
 	mu      sync.Mutex
 	entries map[string]Entry
+	seq     uint64
 	dirty   bool
 }
 
@@ -66,6 +73,11 @@ func New(stateDir string) *Store {
 		var loaded map[string]Entry
 		if json.Unmarshal(b, &loaded) == nil {
 			s.entries = loaded
+			for _, e := range loaded {
+				if e.Seq > s.seq {
+					s.seq = e.Seq
+				}
+			}
 		}
 	}
 	return s
@@ -81,8 +93,9 @@ func (s *Store) Note(rel, name string, pos, duration float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.seq++
 	e := s.entries[rel]
-	e.Rel, e.Name, e.Pos, e.Updated = rel, name, pos, time.Now().Unix()
+	e.Rel, e.Name, e.Pos, e.Updated, e.Seq = rel, name, pos, time.Now().Unix(), s.seq
 	if duration > 0 {
 		e.Duration = duration
 	}
@@ -118,11 +131,23 @@ func (s *Store) Recent(limit int) []Entry {
 	}
 	s.mu.Unlock()
 
-	sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
+	sort.Slice(out, func(i, j int) bool { return newerFirst(out[i], out[j]) })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+func newerFirst(a, b Entry) bool {
+	if a.Updated != b.Updated {
+		return a.Updated > b.Updated
+	}
+	if a.Seq != b.Seq {
+		return a.Seq > b.Seq
+	}
+	// Nothing left to tell them apart, so pick something that does not
+	// change between page loads.
+	return a.Rel < b.Rel
 }
 
 func (s *Store) trimLocked() {
@@ -133,7 +158,7 @@ func (s *Store) trimLocked() {
 	for _, e := range s.entries {
 		all = append(all, e)
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].Updated > all[j].Updated })
+	sort.Slice(all, func(i, j int) bool { return newerFirst(all[i], all[j]) })
 	for _, e := range all[keep:] {
 		delete(s.entries, e.Rel)
 	}
