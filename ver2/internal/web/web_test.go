@@ -1671,3 +1671,49 @@ func TestDiscardByOutputPathCannotEscape(t *testing.T) {
 		t.Fatalf("something outside the library entirely was deleted: %v", err)
 	}
 }
+
+// Safari places a subtitle from inside an MP4 wherever the file says, which
+// put it in the corner on an iPhone and off the picture on a Mac; Chrome
+// does not read one at all. A WebVTT track offered to the page is placed by
+// the browser and works in both — and the copy inside the file stays, since
+// that is the one AirPlay carries to a television.
+func TestThePageOffersItsOwnSubtitleTrack(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a .vtt beside it, nothing changes.
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if strings.Contains(body, "<track") {
+		t.Errorf("a track was offered with no subtitle to put in it:\n%s", body)
+	}
+
+	if err := os.WriteFile(filepath.Join(e.out, "a.vtt"), []byte("WEBVTT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `kind="subtitles"`) || !strings.Contains(body, "/media/a.vtt") {
+		t.Errorf("the subtitle beside the file was not offered:\n%s", body)
+	}
+	if !strings.Contains(body, "/media/a.mp4") {
+		t.Errorf("the video itself went missing:\n%s", body)
+	}
+}
+
+// The subtitle written beside a conversion is part of that result and has no
+// meaning without it.
+func TestDiscardRemovesTheSubtitleToo(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	for name, body := range map[string]string{"a.mp4": "converted", "a.vtt": "WEBVTT\n"} {
+		if err := os.WriteFile(filepath.Join(e.out, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	post(t, e.h, "/discard", url.Values{"rel": {"a.mkv"}})
+	for _, name := range []string{"a.mp4", "a.vtt"} {
+		if _, err := os.Stat(filepath.Join(e.out, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there", name)
+		}
+	}
+}

@@ -7,7 +7,19 @@
 {{if .Codecs}}<p class="meta">{{.Codecs}}</p>{{end}}
 
 {{if .Converted}}
-  <video controls preload="metadata" src="{{.MediaURL}}"></video>
+  <video controls preload="metadata" {{if not .TrackURL}}src="{{.MediaURL}}"{{end}}>
+    {{if .TrackURL}}
+    <source src="{{.MediaURL}}" type="video/mp4">
+    <track kind="subtitles" src="{{.TrackURL}}" srclang="ko" label="한국어" default>
+    {{end}}
+  </video>
+  {{if .TrackURL}}
+  <p class="hint">
+    브라우저에서는 이 페이지가 얹어주는 자막이 나옵니다 — 사파리도 크롬도 위치가
+    맞습니다. <strong>에어플레이로 보내면</strong> 애플TV 가 파일을 직접 받아가므로
+    <strong>파일 안의 자막 트랙</strong>이 쓰이고, 리모컨의 자막 메뉴에서 켭니다.
+  </p>
+  {{end}}
   <p class="meta">
     <a href="{{.MediaURL}}" download>파일 내려받기</a>
   </p>

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -728,6 +729,19 @@ func (q *Queue) run(j *Job) {
 		q.release(j)
 		return
 	}
+	// The same subtitle, written once more beside the video for the browser
+	// to read. Safari places a track from inside the file wherever the file
+	// says, which is not where subtitles belong; Chrome does not read one at
+	// all. A .vtt next to the .mp4 is placed by the browser and works in
+	// both. It cannot replace the track inside the file — AirPlay hands the
+	// television a URL and nothing else — so both exist.
+	if spec.SoftSubs != "" {
+		vtt := strings.TrimSuffix(j.dst, filepath.Ext(j.dst)) + ".vtt"
+		if err := subs.WriteVTT(spec.SoftSubs, vtt); err != nil {
+			log.Printf("could not write %s: %v", filepath.Base(vtt), err)
+		}
+	}
+
 	q.cleanupLive(j)
 	j.finish(Done, "")
 	q.finishedCount.Add(1)

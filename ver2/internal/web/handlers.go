@@ -81,9 +81,14 @@ type watchData struct {
 	Crumbs    []crumb
 	Converted bool
 	MediaURL  string
-	Job       *jobs.View
-	BatchID   string
-	Subs      []subs.Track
+	// TrackURL is a WebVTT subtitle for the page's own player. The copy
+	// inside the MP4 is for whatever the file is handed to — an Apple TV
+	// over AirPlay — and Safari places that one badly while Chrome ignores
+	// it. A <track> is placed by the browser and works in both.
+	TrackURL string
+	Job      *jobs.View
+	BatchID  string
+	Subs     []subs.Track
 
 	// DefaultSub is the track the form starts on, empty meaning "굽지 않음".
 	// Korean is chosen because it is what this library is watched with; any
@@ -126,6 +131,12 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.Stat(s.mapper.Output(rel)); err == nil {
 		data.Converted = true
 		data.MediaURL = s.sign("/media/" + mediaPath(rel))
+		// A subtitle the browser can place itself, when one was written.
+		if vtt := strings.TrimSuffix(mediaPath(rel), ".mp4") + ".vtt"; vtt != "" {
+			if _, err := os.Stat(filepath.Join(s.cfg.OutputDir, filepath.FromSlash(vtt))); err == nil {
+				data.TrackURL = s.sign("/media/" + vtt)
+			}
+		}
 	}
 	if v, ok := s.queue.ByRel(rel); ok {
 		jv := v
@@ -634,7 +645,12 @@ func (s *Server) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		}
 		path := s.mapper.Output(rel)
 		target = rel.String()
-		remove = func() error { return os.Remove(path) }
+		remove = func() error {
+			// The subtitle written beside it is part of the same result and
+			// has no meaning without it.
+			os.Remove(strings.TrimSuffix(path, filepath.Ext(path)) + ".vtt")
+			return os.Remove(path)
+		}
 		back = "/watch/" + rel.String()
 	}
 
