@@ -1346,3 +1346,31 @@ func mediaSrc(t *testing.T, body string) string {
 	}
 	return html.UnescapeString(rest[:j])
 }
+
+// Without an icon the browser asks for /favicon.ico before it has even parsed
+// the page, and behind a password that is an auth challenge and a 404 on every
+// page load — enough to bury everything else in the log.
+func TestTheFaviconDoesNotFillTheLog(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+
+	if got := get(t, e.h, "/static/favicon.svg").Code; got != http.StatusOK {
+		t.Errorf("the icon is not served: %d", got)
+	}
+	body := get(t, e.h, "/browse/").Body.String()
+	if !strings.Contains(body, `rel="icon"`) {
+		t.Errorf("the page does not point at an icon:\n%s", body)
+	}
+	if got := get(t, e.h, "/favicon.ico").Code; got != http.StatusNoContent {
+		t.Errorf("/favicon.ico = %d, want 204 so clients stop asking", got)
+	}
+
+	e.srv.cfg.LogRequests = true
+	var out strings.Builder
+	log.SetOutput(&out)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	get(t, e.srv.Handler(), "/favicon.ico")
+	if out.String() != "" {
+		t.Errorf("the icon request was logged: %q", out.String())
+	}
+}

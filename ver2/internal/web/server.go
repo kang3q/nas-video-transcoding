@@ -116,6 +116,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /source/", s.handleSource)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 
+	// The icon is an SVG, which every browser here prefers when the page
+	// links to one. Some clients ask for /favicon.ico anyway, before the page
+	// is even parsed — behind a password that is an auth challenge and a 404
+	// on every single page load, which buries the log. Answering "there is
+	// nothing here, stop asking" costs one line.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
@@ -160,7 +170,8 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Static assets and the event stream are constant and say nothing.
 		quiet := strings.HasPrefix(r.URL.Path, "/static/") ||
-			strings.HasPrefix(r.URL.Path, "/api/events")
+			strings.HasPrefix(r.URL.Path, "/api/events") ||
+			r.URL.Path == "/favicon.ico"
 		if quiet {
 			next.ServeHTTP(w, r)
 			return
