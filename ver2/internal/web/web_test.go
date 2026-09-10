@@ -1489,3 +1489,56 @@ func TestPlayableNoticesADiscard(t *testing.T) {
 		t.Errorf("a discarded conversion is still offered:\n%s", body)
 	}
 }
+
+// The trap this project exists because of: a .mp4 holding something no
+// browser will play. The playable list has to guess from the extension for a
+// file nothing has looked inside, so it says yes; this page opens it and
+// finds out. Saying nothing would leave the two screens contradicting each
+// other with no explanation.
+func TestAMp4ThatDoesNotPlaySaysWhy(t *testing.T) {
+	e := newEnv(t, false, "a.mp4") // the stub prober reports HEVC
+
+	body := get(t, e.h, "/watch/a.mp4").Body.String()
+	if strings.Contains(body, "<video") {
+		t.Fatalf("a player was offered for something that will not play:\n%s", body)
+	}
+	if strings.Contains(body, "아직 변환하지 않은 파일입니다") {
+		t.Errorf("the page gives no reason, contradicting the list it came from:\n%s", body)
+	}
+	if !strings.Contains(body, "확장자는 .mp4 지만") {
+		t.Errorf("the page does not explain the mismatch:\n%s", body)
+	}
+	if !strings.Contains(body, "HEVC") {
+		t.Errorf("the page does not say what is actually inside:\n%s", body)
+	}
+}
+
+// Once the file has been opened, the guess is over. The list must stop
+// offering it rather than repeat the same wrong answer for ten more minutes.
+func TestOpeningAFileCorrectsThePlayableList(t *testing.T) {
+	e := newEnv(t, false, "S/a.mp4")
+	// Nothing cached: the list has only the extension to go on, and says yes.
+	p := &countingProber{info: mediainfo.Info{
+		Duration: 100,
+		Streams: []mediainfo.Stream{
+			{Index: 0, Type: "video", Codec: "hevc"},
+			{Index: 1, Type: "audio", Codec: "aac"},
+		},
+	}}
+	e.srv.prober = p
+
+	if body := get(t, e.h, "/playable/S").Body.String(); !strings.Contains(body, "a.mp4") {
+		t.Fatalf("setup: the extension guess should list it:\n%s", body)
+	}
+
+	// Opening it teaches the prober the truth.
+	get(t, e.h, "/watch/S/a.mp4")
+	if p.count() == 0 {
+		t.Fatal("the page never looked inside")
+	}
+	p.cached = true // what a real prober would now answer
+
+	if body := get(t, e.h, "/playable/S").Body.String(); strings.Contains(body, "a.mp4") {
+		t.Errorf("the list repeated a guess it had been corrected on:\n%s", body)
+	}
+}

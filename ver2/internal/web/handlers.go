@@ -100,6 +100,13 @@ type watchData struct {
 	SourceURL string
 	Probed    bool
 	Codecs    string
+
+	// MisleadingExt marks the trap this whole project exists because of: a
+	// .mp4 that holds something no browser will play. The playable list has
+	// to guess from the extension for a file nothing has looked inside, so it
+	// says yes; this page opens it and finds out. Without saying so, the two
+	// screens simply contradict each other.
+	MisleadingExt bool
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -137,17 +144,32 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	// conversion form is folded away. So take a cached answer if there is one
 	// and otherwise go straight to the player.
 	info, probed := mediainfo.Info{}, false
-	if data.Converted {
+	switch {
+	case data.Converted:
 		info, probed = s.cachedInfo(rel)
-	} else {
-		info, probed = s.inspect(r.Context(), rel)
+	default:
+		var cached bool
+		info, cached = s.cachedInfo(rel)
+		probed = cached
+		if !cached {
+			info, probed = s.inspect(r.Context(), rel)
+			// Something is now known that was not. The playable list may have
+			// been guessing about this file from its extension, and guessing
+			// is exactly what it should stop doing once there is an answer.
+			if probed {
+				s.forgetIndex()
+			}
+		}
 	}
 	if probed {
 		data.Probed = true
 		data.Codecs = describe(info)
-		if info.BrowserReady() {
+		switch {
+		case info.BrowserReady():
 			data.PlaysAsIs = true
 			data.SourceURL = s.sign("/source/" + rel.String())
+		case rel.Ext() == ".mp4":
+			data.MisleadingExt = true
 		}
 	}
 	data.Subs = s.subs.Find(rel)
