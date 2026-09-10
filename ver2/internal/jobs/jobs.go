@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nvt/ver2/internal/airplay"
@@ -216,6 +217,10 @@ type Queue struct {
 	// before asking whether the result looks right. Far enough in that an
 	// opening sequence is over and burned-in subtitles are on screen.
 	checkpointAt float64
+
+	// finishedCount lets a cached listing notice that a conversion landed,
+	// without taking the queue's lock or walking anything.
+	finishedCount atomic.Uint64
 
 	mu       sync.Mutex
 	jobs     map[string]*Job
@@ -498,6 +503,14 @@ func (q *Queue) BatchView(id string) (BatchView, bool) {
 	return v, true
 }
 
+// Finished counts conversions that have completed since this process began.
+//
+// It exists so a cached view of the library can tell, for the price of an
+// atomic read, whether anything it summarised has changed. Walking a library
+// takes ten seconds on this hardware; doing it again because a page was
+// opened twice is ten seconds nobody gets back.
+func (q *Queue) Finished() uint64 { return q.finishedCount.Load() }
+
 // LiveDirFor returns where a running job is writing its HLS rendition, or ""
 // when it has none. Used to decide whether to offer a player for something
 // that is still being made.
@@ -668,6 +681,7 @@ func (q *Queue) run(j *Job) {
 	}
 	q.cleanupLive(j)
 	j.finish(Done, "")
+	q.finishedCount.Add(1)
 	log.Printf("convert done: %s in %s", j.Rel.String(), time.Since(j.startedAt).Round(time.Second))
 }
 

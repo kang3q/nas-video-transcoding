@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"nvt/ver2/internal/config"
@@ -49,6 +50,11 @@ type Prober interface {
 
 type Server struct {
 	secret []byte // signs media links, so AirPlay can fetch past basic auth
+
+	// playable is the cached answer to "what can I watch?". Building it walks
+	// the whole library, which is ten seconds on this hardware.
+	indexMu  sync.Mutex
+	playable *playableIndex
 
 	cfg    *config.Config
 	mapper *outpath.Mapper

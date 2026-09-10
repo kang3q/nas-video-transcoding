@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -580,132 +579,6 @@ func displayName(rel outpath.Rel) string {
 	return rel.Base()
 }
 
-// --- everything that plays right now ---
-
-type playableRow struct {
-	Name string
-	Dir  string
-	Href string
-	Size int64
-	// Converted separates the two ways a file gets here: we made it, or it
-	// was already fine. Worth showing, because the second kind can still be
-	// converted — to burn subtitles in.
-	Converted bool
-}
-
-type playableGroup struct {
-	Dir     string
-	DirHref string
-	Rows    []playableRow
-}
-
-type playableData struct {
-	Groups []playableGroup
-	Total  int
-	// Unprobed counts files judged by their extension alone, because nothing
-	// has looked inside them yet. Saying so is honest: some of them will turn
-	// out to hold HEVC and not play.
-	Unprobed int
-}
-
-// handlePlayable lists everything watchable now, in one flat list.
-//
-// It reads directories and nothing else. Opening files to find out what is in
-// them is exactly what made v1 take half a minute to show a folder, and there
-// are thousands of them; a conversion existing is already proof that it
-// plays, and for sources the answer comes from the probe cache or, failing
-// that, from the extension — the same rule the library listing uses.
-func (s *Server) handlePlayable(w http.ResponseWriter, r *http.Request) {
-	var data playableData
-	root := outpath.Rel{}
-
-	// Converted output first, keyed by the source it came from, so a file
-	// that was converted does not also appear as its unconverted self.
-	converted := map[string]library.Entry{}
-	for _, e := range s.lib.WalkOutput(root) {
-		converted[library.TrimExt(e.Rel.String())] = e
-	}
-
-	byDir := map[string][]playableRow{}
-	seen := map[string]bool{}
-
-	for _, e := range s.lib.WalkVideos(root) {
-		stem := library.TrimExt(e.Rel.String())
-		out, isConverted := converted[stem]
-		switch {
-		case isConverted:
-			seen[stem] = true
-		case s.playableEntry(e):
-			if !e.IsVideo {
-				continue
-			}
-		default:
-			continue
-		}
-
-		row := playableRow{
-			Name: e.Name, Dir: e.Rel.Dir().String(), Size: e.Size,
-			Href:      (&url.URL{Path: "/watch/" + e.Rel.String()}).String(),
-			Converted: isConverted,
-		}
-		if isConverted {
-			row.Size = out.Size
-		} else if !s.probed(e) {
-			data.Unprobed++
-		}
-		byDir[row.Dir] = append(byDir[row.Dir], row)
-	}
-
-	// Conversions whose source is gone still play, and are the only record
-	// that they exist.
-	for stem, e := range converted {
-		if seen[stem] {
-			continue
-		}
-		dir := e.Rel.Dir().String()
-		byDir[dir] = append(byDir[dir], playableRow{
-			Name: e.Name, Dir: dir, Size: e.Size, Converted: true,
-			Href: s.sign("/media/" + e.Rel.String()),
-		})
-	}
-
-	dirs := make([]string, 0, len(byDir))
-	for d := range byDir {
-		dirs = append(dirs, d)
-	}
-	sort.Slice(dirs, func(i, j int) bool { return library.NaturalLess(dirs[i], dirs[j]) })
-
-	for _, d := range dirs {
-		rows := byDir[d]
-		sort.Slice(rows, func(i, j int) bool { return library.NaturalLess(rows[i].Name, rows[j].Name) })
-		name := d
-		if name == "" {
-			name = "라이브러리 최상위"
-		}
-		data.Groups = append(data.Groups, playableGroup{
-			Dir: name, DirHref: (&url.URL{Path: "/browse/" + d}).String(), Rows: rows,
-		})
-		data.Total += len(rows)
-	}
-
-	s.render(w, "playable", "재생 가능", "playable", data)
-}
-
-// playableEntry answers "can this be watched as it is?" without opening it.
-func (s *Server) playableEntry(e library.Entry) bool {
-	if info, ok := s.prober.CachedAt(s.mapper.Source(e.Rel), e.Size, e.Mod.Unix()); ok {
-		return info.BrowserReady()
-	}
-	// Never looked at. A .mp4 is taken at its word, which is right often
-	// enough to be useful and wrong often enough to be counted and said.
-	return e.Rel.Ext() == ".mp4"
-}
-
-func (s *Server) probed(e library.Entry) bool {
-	_, ok := s.prober.CachedAt(s.mapper.Source(e.Rel), e.Size, e.Mod.Unix())
-	return ok
-}
-
 // --- the converted library ---
 
 type convertedRow struct {
@@ -923,6 +796,7 @@ func (s *Server) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("discarded conversion: %s", rel.String())
+	s.forgetIndex() // one fewer thing to watch, and the listing knows it
 
 	// Back to the same page, which now offers to convert it again.
 	http.Redirect(w, r, (&url.URL{Path: "/watch/" + rel.String()}).String(), http.StatusSeeOther)

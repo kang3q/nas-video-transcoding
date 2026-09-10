@@ -1460,14 +1460,15 @@ func TestTheHeaderOffersTheConvertedLibrary(t *testing.T) {
 
 // --- everything that plays right now ---
 
-// One list of what can be watched, drawn from both sides: what was converted,
-// and what never needed converting.
-func TestPlayableListsBothKinds(t *testing.T) {
-	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mp4", "S/ep3.avi", "T/ep1.mkv")
-	// Nothing has been looked inside, so sources fall back to the extension
-	// rule: a .mp4 is taken at its word and nothing else is. ep1 gets a real
-	// conversion, which needs no such guess.
-	e.srv.prober = stubProber{uncached: true}
+// The library is far too big for one flat list, so the same folders as the
+// library — but with only the branches that lead somewhere.
+func TestPlayableIsATreeOfWhatLeadsSomewhere(t *testing.T) {
+	e := newEnv(t, false,
+		"S/ep1.mkv", "S/ep2.mp4", "S/ep3.avi",
+		"T/nothing.mkv",
+		"U/deep/ep9.mp4",
+	)
+	e.srv.prober = stubProber{uncached: true} // judge by extension
 	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1475,31 +1476,38 @@ func TestPlayableListsBothKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body := get(t, e.h, "/playable/").Body.String()
+	root := get(t, e.h, "/playable/").Body.String()
+	if !strings.Contains(root, `href="/playable/S"`) {
+		t.Errorf("the folder holding playable files is missing:\n%s", root)
+	}
+	if !strings.Contains(root, `href="/playable/U"`) {
+		t.Errorf("a folder whose playable files are deeper down was pruned:\n%s", root)
+	}
+	if strings.Contains(root, `href="/playable/T"`) {
+		t.Errorf("a folder with nothing to watch was offered:\n%s", root)
+	}
+	// The root lists folders, not every file in the library.
+	if strings.Contains(root, "ep1.mkv") {
+		t.Errorf("the root flattened the tree:\n%s", root)
+	}
 
-	if !strings.Contains(body, "ep1.mkv") {
-		t.Errorf("the converted file is missing:\n%s", body)
+	inS := get(t, e.h, "/playable/S").Body.String()
+	if !strings.Contains(inS, "ep1.mkv") || !strings.Contains(inS, "ep2.mp4") {
+		t.Errorf("the folder does not list what is in it:\n%s", inS)
 	}
-	if !strings.Contains(body, "ep2.mp4") {
-		t.Errorf("a file that plays as it is was left out:\n%s", body)
+	if strings.Contains(inS, "ep3.avi") {
+		t.Errorf("an .avi nobody converted was listed as playable:\n%s", inS)
 	}
-	if strings.Contains(body, "ep3.avi") {
-		t.Errorf("an .avi nobody has converted was listed as playable:\n%s", body)
+	if !strings.Contains(inS, "변환본") || !strings.Contains(inS, "원본 그대로") {
+		t.Errorf("the two kinds are not told apart:\n%s", inS)
 	}
-	if strings.Contains(body, "T/ep1.mkv") {
-		t.Errorf("an unconverted .mkv was listed as playable:\n%s", body)
-	}
-	if !strings.Contains(body, "변환본") || !strings.Contains(body, "원본 그대로") {
-		t.Errorf("the two kinds are not told apart:\n%s", body)
-	}
-	// The folder heading leads back into the library.
-	if !strings.Contains(body, `href="/browse/S"`) {
-		t.Errorf("the folder does not link to the library:\n%s", body)
+	if !strings.Contains(inS, `href="/browse/S"`) {
+		t.Errorf("no way across to the same folder in the library:\n%s", inS)
 	}
 }
 
-// A converted file must appear once, as the conversion — not also as the
-// source it was made from.
+// A converted file appears once, as the conversion — not also as the source
+// it was made from.
 func TestPlayableDoesNotListAFileTwice(t *testing.T) {
 	e := newEnv(t, false, "S/ep1.mp4")
 	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
@@ -1508,32 +1516,115 @@ func TestPlayableDoesNotListAFileTwice(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(e.out, "S", "ep1.mp4"), []byte("done"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body := get(t, e.h, "/playable/").Body.String()
+	body := get(t, e.h, "/playable/S").Body.String()
 	if n := strings.Count(body, "ep1.mp4</a>"); n != 1 {
 		t.Errorf("listed %d times, want once:\n%s", n, body)
 	}
 }
 
 // Opening thousands of files to find out what is in them is what made v1 take
-// half a minute to show one folder. This page must read directories only.
+// half a minute to show one folder. This page reads directories only.
 func TestPlayableNeverProbes(t *testing.T) {
 	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mp4", "T/ep3.mkv")
 	p := &countingProber{info: mediainfo.Info{Duration: 100}}
 	e.srv.prober = p
 
 	get(t, e.h, "/playable/")
+	get(t, e.h, "/playable/S")
 	if n := p.count(); n != 0 {
 		t.Errorf("ffprobe ran %d time(s) rendering a list of file names", n)
+	}
+}
+
+// Walking the library takes ten seconds on the hardware this runs on. Doing
+// it again because a page was opened twice is ten seconds nobody gets back.
+func TestPlayableIsWalkedOnceAndKept(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mp4")
+	e.srv.prober = stubProber{uncached: true}
+
+	first := e.srv.index()
+	if e.srv.index() != first {
+		t.Error("the library was walked again for a second page view")
+	}
+
+	// A conversion finishing changes the answer, so the next view rebuilds.
+	e.srv.forgetIndex()
+	if e.srv.index() == first {
+		t.Error("a dropped index was handed back anyway")
+	}
+}
+
+// Files also arrive on a NAS by means that have nothing to do with this
+// program, so there has to be a way to say "look again".
+func TestPlayableCanBeAskedToLookAgain(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mp4")
+	e.srv.prober = stubProber{uncached: true}
+
+	before := e.srv.index()
+	rec := get(t, e.h, "/playable/S?refresh=1")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/playable/S" {
+		t.Errorf("Location = %q, want the folder back without the flag", got)
+	}
+	if e.srv.index() == before {
+		t.Error("the refresh did not throw the old answer away")
 	}
 }
 
 // Judging by the extension is a guess, and a page that guesses should say how
 // often — some of those .mp4 files hold HEVC and will not play.
 func TestPlayableSaysHowManyItGuessedAt(t *testing.T) {
-	e := newEnv(t, false, "a.mp4", "b.mp4")
-	e.srv.prober = &countingProber{} // nothing cached
-	body := get(t, e.h, "/playable/").Body.String()
+	e := newEnv(t, false, "S/a.mp4", "S/b.mp4")
+	e.srv.prober = stubProber{uncached: true}
+	body := get(t, e.h, "/playable/S").Body.String()
 	if !strings.Contains(body, "확장자만 보고") {
 		t.Errorf("the page does not admit it is guessing:\n%s", body)
+	}
+}
+
+// A conversion finishing is the one event that certainly changes the answer,
+// and the listing has to notice without being told.
+func TestPlayableNoticesAConversionFinishing(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv")
+	e.srv.prober = stubProber{uncached: true}
+
+	if body := get(t, e.h, "/playable/").Body.String(); strings.Contains(body, "/playable/S") {
+		t.Fatalf("nothing is playable yet:\n%s", body)
+	}
+
+	post(t, e.h, "/convert", url.Values{"rel": {"S/ep1.mkv"}, "scope": {"file"}})
+	waitFor(t, "the conversion to finish", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Done {
+				return true
+			}
+		}
+		return false
+	})
+
+	body := get(t, e.h, "/playable/").Body.String()
+	if !strings.Contains(body, "/playable/S") {
+		t.Errorf("the finished conversion never appeared:\n%s", body)
+	}
+}
+
+// Discarding one removes it, and the listing must not go on offering it.
+func TestPlayableNoticesADiscard(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv")
+	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.out, "S", "ep1.mp4"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if body := get(t, e.h, "/playable/S").Body.String(); !strings.Contains(body, "ep1.mkv") {
+		t.Fatalf("setup: it should be listed:\n%s", body)
+	}
+
+	post(t, e.h, "/discard", url.Values{"rel": {"S/ep1.mkv"}})
+	if body := get(t, e.h, "/playable/S").Body.String(); strings.Contains(body, "ep1.mkv") {
+		t.Errorf("a discarded conversion is still offered:\n%s", body)
 	}
 }

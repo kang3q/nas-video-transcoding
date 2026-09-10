@@ -1,40 +1,56 @@
 {{define "content"}}
-<h1>재생 가능</h1>
+<nav class="crumbs">
+  {{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}<a href="{{$c.Href}}">{{$c.Name}}</a>{{end}}
+</nav>
 
-{{if not .Groups}}
-  <p class="empty">지금 바로 볼 수 있는 파일이 없습니다.</p>
-  <p class="hint"><a href="/browse/">라이브러리</a>에서 파일을 골라 변환하세요.</p>
-{{else}}
 <p class="meta">
-  {{.Total}}개
+  <a href="{{.SourceDirHref}}">원본 라이브러리의 같은 폴더 열기 →</a>
+</p>
+
+{{if and (not .Subdirs) (not .Rows)}}
+  {{if .Overall}}
+    <p class="empty">이 폴더에는 지금 볼 수 있는 파일이 없습니다.</p>
+  {{else}}
+    <p class="empty">지금 바로 볼 수 있는 파일이 없습니다.</p>
+    <p class="hint"><a href="/browse/">라이브러리</a>에서 파일을 골라 변환하세요.</p>
+  {{end}}
+{{else}}
+
+<p class="meta">
+  이 아래 {{.Total}}개
   {{if .Unprobed}}
-    · 이 중 {{.Unprobed}}개는 아직 안을 들여다보지 않아 <strong>확장자만 보고</strong>
-    판단했습니다. 열어보면 재생되지 않는 것이 섞여 있을 수 있습니다.
+    · 라이브러리 전체 {{.Overall}}개 중 {{.Unprobed}}개는 아직 안을 들여다보지 않아
+    <strong>확장자만 보고</strong> 판단했습니다
   {{end}}
 </p>
 
-{{range .Groups}}
-<section class="group">
-  <h2><a href="{{.DirHref}}">{{.Dir}}</a></h2>
-  <ul class="listing">
-    {{range .Rows}}
-    <li class="video">
-      <div class="line">
-        <a class="name" href="{{.Href}}">{{.Name}}</a>
-        <span class="meta">{{size .Size}}</span>
-        {{if .Converted}}<span class="tag done">변환본</span>{{else}}<span class="tag">원본 그대로</span>{{end}}
-      </div>
-    </li>
-    {{end}}
-  </ul>
-</section>
-{{end}}
+<ul class="listing">
+  {{range .Subdirs}}
+  <li class="dir">
+    <div class="line">
+      <a class="name" href="{{.Href}}">{{.Name}}/</a>
+      <span class="meta">{{.Count}}개</span>
+    </div>
+  </li>
+  {{end}}
+  {{range .Rows}}
+  <li class="video">
+    <div class="line">
+      <a class="name" href="{{.Href}}">{{.Name}}</a>
+      <span class="meta">{{size .Size}}</span>
+      {{if .Converted}}<span class="tag done">변환본</span>{{else}}<span class="tag">원본 그대로</span>{{end}}
+      {{if .Guessed}}<span class="tag">확장자로 추정</span>{{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
 {{end}}
 
 <p class="hint">
-  변환한 결과물과, 변환하지 않아도 브라우저가 재생하는 원본을 한자리에 모은
-  목록입니다. 폴더는 읽지만 <strong>파일을 열지는 않습니다</strong> — 수천 개를
-  열어보는 것이 v1 에서 폴더 하나 여는 데 30초가 걸리게 만든 원인이었습니다.
-  그래서 아직 한 번도 변환·조회하지 않은 파일은 확장자로만 판단합니다.
+  볼 수 있는 것만 남긴 폴더 구조입니다. 아무것도 없는 가지는 나오지 않으므로,
+  들어갔다가 헛걸음할 일이 없습니다.
+  <a href="?refresh=1">목록 새로 고침</a>{{if .Stale}} (마지막으로 훑은 지 {{dur .Stale.Seconds}}){{end}}.
+  훑는 데 시간이 걸려 결과를 재사용합니다 — 변환이 끝나면 자동으로 다시 훑고,
+  나스에 파일을 직접 넣으셨다면 위 링크를 누르세요.
 </p>
 {{end}}
