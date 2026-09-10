@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 
 	"nvt/ver2/internal/mediainfo"
@@ -508,5 +510,64 @@ func TestAnEmptySRTIsRefusedToo(t *testing.T) {
 	// would look empty.
 	if err := checkHasDialogue(full, FormatASS, "Show.smi"); err == nil {
 		t.Error("an SRT passed the ASS check, so the marker is not being chosen")
+	}
+}
+
+// UTF-16 slips through every other check. Its ASCII text is one byte of
+// content and one zero byte per character, and zero is a valid UTF-8 byte —
+// so "<SAMI>" saved as UTF-16 looks like valid UTF-8 to Go, passes through
+// untouched, and reaches ffmpeg as bytes no demuxer recognises. ffmpeg then
+// reads the file, finds nothing, and exits successfully.
+func TestToUTF8DecodesUTF16(t *testing.T) {
+	const text = "<SAMI>\n<SYNC Start=1000><P Class=KRCC>류크, 사과 줄까?\n"
+
+	cases := []struct {
+		name string
+		enc  encoding.Encoding
+	}{
+		{"little endian with a BOM", unicode.UTF16(unicode.LittleEndian, unicode.UseBOM)},
+		{"big endian with a BOM", unicode.UTF16(unicode.BigEndian, unicode.UseBOM)},
+		{"little endian with none", unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)},
+		{"big endian with none", unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _, err := transform.Bytes(tc.enc.NewEncoder(), []byte(text))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := toUTF8(raw)
+			if err != nil {
+				t.Fatalf("toUTF8: %v", err)
+			}
+			if string(got) != text {
+				t.Errorf("got %q, want %q", got, text)
+			}
+		})
+	}
+}
+
+// And it must not see UTF-16 where there is none — a CP949 file has plenty
+// of high bytes but no zeros, and plain ASCII has neither.
+func TestToUTF8LeavesSingleByteTextAlone(t *testing.T) {
+	cp949, _, err := transform.Bytes(korean.EUCKR.NewEncoder(),
+		[]byte("<SYNC Start=1000><P Class=KRCC>류크, 사과 줄까?\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := utf16Encoding(cp949); ok {
+		t.Error("a CP949 file was taken for UTF-16")
+	}
+	got, err := toUTF8(cp949)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "류크") {
+		t.Errorf("CP949 no longer decodes: %q", got)
+	}
+
+	ascii := []byte("1\n00:00:01,000 --> 00:00:02,000\nI'll take a potato chip.\n")
+	if _, ok := utf16Encoding(ascii); ok {
+		t.Error("plain ASCII was taken for UTF-16")
 	}
 }

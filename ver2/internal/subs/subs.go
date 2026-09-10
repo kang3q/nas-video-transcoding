@@ -27,7 +27,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 
 	"nvt/ver2/internal/mediainfo"
@@ -431,13 +433,14 @@ func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, a
 		"-c:s", f.codec(),
 		out,
 	)
-	if b, err := cmd.CombinedOutput(); err != nil {
+	said, err := cmd.CombinedOutput()
+	if err != nil {
 		os.Remove(out)
-		return "", fmt.Errorf("subs: extracting stream %d: %w: %s", idx, err, strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("subs: extracting stream %d: %w: %s", idx, err, strings.TrimSpace(string(said)))
 	}
 	if err := checkHasDialogue(out, f, fmt.Sprintf("stream %d of %s", idx, rel.Base())); err != nil {
 		os.Remove(out)
-		return "", err
+		return "", withFFmpegOutput(err, said, "")
 	}
 	return out, nil
 }
@@ -467,19 +470,51 @@ func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string, f 
 	defer os.Remove(staged)
 
 	out := filepath.Join(p.TempDir, jobID+f.ext())
+	// warning, not error: a demuxer that reads the file and finds nothing it
+	// recognises says so at warning level and exits zero. That message is the
+	// only account of what went wrong, and throwing it away leaves "produced
+	// no subtitle lines" with nothing behind it.
 	cmd := exec.CommandContext(ctx, p.FFmpeg,
-		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+		"-nostdin", "-hide_banner", "-loglevel", "warning", "-y",
 		"-i", staged, "-c:s", f.codec(), out,
 	)
-	if b, err := cmd.CombinedOutput(); err != nil {
+	said, err := cmd.CombinedOutput()
+	if err != nil {
 		os.Remove(out)
-		return "", fmt.Errorf("subs: converting %s: %w: %s", rel.Base(), err, strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("subs: converting %s: %w: %s", rel.Base(), err, strings.TrimSpace(string(said)))
 	}
 	if err := checkHasDialogue(out, f, rel.Base()); err != nil {
 		os.Remove(out)
-		return "", err
+		return "", withFFmpegOutput(err, said, firstLine(text))
 	}
 	return out, nil
+}
+
+// withFFmpegOutput attaches whatever ffmpeg had to say, and failing that the
+// first line of what it was handed. One of the two usually names the problem:
+// a file that is not really SAMI, or one whose text came out as mojibake.
+func withFFmpegOutput(err error, said []byte, head string) error {
+	if s := strings.TrimSpace(string(said)); s != "" {
+		return fmt.Errorf("%w — ffmpeg said: %s", err, short(s))
+	}
+	if head != "" {
+		return fmt.Errorf("%w — 파일 첫 줄: %q", err, head)
+	}
+	return err
+}
+
+func firstLine(b []byte) string {
+	if i := bytes.IndexAny(b, "\r\n"); i >= 0 {
+		b = b[:i]
+	}
+	return short(strings.TrimSpace(string(b)))
+}
+
+func short(s string) string {
+	if len(s) > 200 {
+		return s[:200] + "…"
+	}
+	return s
 }
 
 // checkHasDialogue refuses a subtitle file with nothing in it to draw.
@@ -512,6 +547,21 @@ func checkHasDialogue(path string, f Format, name string) error {
 // Decoding here rather than with -sub_charenc keeps the guess in one place and
 // out of a command line.
 func toUTF8(raw []byte) ([]byte, error) {
+	// UTF-16 has to be caught before anything else, because it slips through
+	// every later check. Its ASCII text is one byte of content and one zero
+	// byte per character, and zero is a perfectly valid UTF-8 byte — so
+	// "<SAMI>" saved as UTF-16 is valid UTF-8 as far as Go is concerned, gets
+	// passed through untouched, and reaches ffmpeg as "<\x00S\x00A\x00…",
+	// which no demuxer recognises. It then reads the file, finds nothing, and
+	// exits successfully.
+	if enc, ok := utf16Encoding(raw); ok {
+		decoded, _, err := transform.Bytes(enc.NewDecoder(), raw)
+		if err != nil {
+			return nil, fmt.Errorf("looks like UTF-16 but will not decode: %w", err)
+		}
+		return trimBOM(decoded), nil
+	}
+
 	raw = trimBOM(raw)
 	if utf8.Valid(raw) {
 		return raw, nil
@@ -522,6 +572,51 @@ func toUTF8(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("not UTF-8 and not CP949: %w", err)
 	}
 	return decoded, nil
+}
+
+// utf16Encoding reports whether this is UTF-16, and which way round.
+//
+// A byte-order mark settles it. Without one, the giveaway is that half the
+// bytes are zero: Korean and Latin text both sit in the low half of the
+// plane, so every character carries a zero byte, and which side it falls on
+// says the endianness.
+func utf16Encoding(b []byte) (encoding.Encoding, bool) {
+	if len(b) >= 2 {
+		switch {
+		case b[0] == 0xFF && b[1] == 0xFE:
+			return unicode.UTF16(unicode.LittleEndian, unicode.ExpectBOM), true
+		case b[0] == 0xFE && b[1] == 0xFF:
+			return unicode.UTF16(unicode.BigEndian, unicode.ExpectBOM), true
+		}
+	}
+
+	head := b
+	if len(head) > 4096 {
+		head = head[:4096]
+	}
+	if len(head) < 16 {
+		return nil, false
+	}
+	var evenZero, oddZero int
+	for i, c := range head {
+		if c != 0 {
+			continue
+		}
+		if i%2 == 0 {
+			evenZero++
+		} else {
+			oddZero++
+		}
+	}
+	// A third of one side being zero is not something text in any single-byte
+	// encoding does.
+	switch quarter := len(head) / 6; {
+	case oddZero > quarter && evenZero <= quarter:
+		return unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM), true
+	case evenZero > quarter && oddZero <= quarter:
+		return unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM), true
+	}
+	return nil, false
 }
 
 func trimBOM(b []byte) []byte {
