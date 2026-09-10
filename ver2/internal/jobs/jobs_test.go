@@ -922,3 +922,62 @@ func TestTheSubtitleFormatFollowsWhatItIsFor(t *testing.T) {
 		})
 	}
 }
+
+// The browser's copy of the subtitle is written from whatever the resolver
+// produced, so it does not matter whether that came from a file beside the
+// video or from a track inside it. Both arrive as the same prepared SRT.
+func TestTheBrowserCopyIsWrittenForAnEmbeddedTrackToo(t *testing.T) {
+	srt := filepath.Join(t.TempDir(), "prepared.srt")
+	if err := os.WriteFile(srt,
+		[]byte("1\n00:00:01,000 --> 00:00:03,000\n류크, 사과 줄까?\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		if spec.SoftSubs != srt {
+			t.Errorf("SoftSubs = %q, want the prepared file", spec.SoftSubs)
+		}
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv")
+	h.q.prober = fakeProber{info: h264Only()}
+	h.q.subtitles = &fakeSubs{path: srt}
+
+	// "embedded:2" is a track inside the video, not a file beside it.
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
+		Options{Subtitles: true, PickedSubtitleID: "embedded:2"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
+
+	vtt := filepath.Join(h.out, "a.vtt")
+	body, err := os.ReadFile(vtt)
+	if err != nil {
+		t.Fatalf("no subtitle was written for the browser: %v", err)
+	}
+	if !strings.HasPrefix(string(body), "WEBVTT") {
+		t.Errorf("not WebVTT:\n%s", body)
+	}
+	if !strings.Contains(string(body), "류크, 사과 줄까?") {
+		t.Errorf("the text did not survive:\n%s", body)
+	}
+}
+
+// Without subtitles there is nothing to write, and an empty .vtt beside a
+// video would make the page offer a track that shows nothing.
+func TestNoBrowserCopyWhenThereAreNoSubtitles(t *testing.T) {
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv")
+	h.q.prober = fakeProber{info: h264Only()}
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
+
+	if _, err := os.Stat(filepath.Join(h.out, "a.vtt")); !os.IsNotExist(err) {
+		t.Error("a subtitle file was written for a video that has none")
+	}
+}
