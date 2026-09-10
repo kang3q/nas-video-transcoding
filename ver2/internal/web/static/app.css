@@ -124,3 +124,7 @@ section.group { margin: 1.4rem 0; }
 section.group > h2 { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.3rem; }
 section.group > h2 > a { color: var(--muted); text-decoration: none; }
 section.group > h2 > a:hover { text-decoration: underline; }
+
+/* A destructive action on a list row should be reachable but never the
+   thing the eye lands on. */
+button.small { font-size: 0.8rem; padding: 0.2rem 0.5rem; }

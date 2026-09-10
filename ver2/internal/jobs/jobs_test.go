@@ -21,10 +21,20 @@ import (
 type fakeProber struct {
 	info mediainfo.Info
 	err  error
+	// uncached makes the dispatcher unable to tell a copy from an encode,
+	// which is what it faces for a file nothing has looked at yet.
+	uncached bool
 }
 
 func (f fakeProber) Probe(context.Context, string, os.FileInfo) (mediainfo.Info, error) {
 	return f.info, f.err
+}
+
+func (f fakeProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) {
+	if f.uncached || f.err != nil {
+		return mediainfo.Info{}, false
+	}
+	return f.info, true
 }
 
 func h264Info(dur float64) mediainfo.Info {
@@ -756,5 +766,114 @@ func TestASoftSubtitleKeepsTheRemuxShortcut(t *testing.T) {
 	}
 	if gotLang != "kor" {
 		t.Errorf("SubsLang = %q, so a player would not name the track", gotLang)
+	}
+}
+
+// Copying an episode's streams takes seconds; re-encoding one takes forty
+// minutes. Making the first wait behind the second wastes the case the queue
+// is quickest at — someone adding subtitles to something they want to watch
+// tonight.
+func TestCopyOnlyJobsGoFirst(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var order []string
+
+	runner := fakeRunner{fn: func(ctx context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		mu.Lock()
+		order = append(order, filepath.Base(spec.Src))
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return writeOutput(spec)
+	}}
+
+	// One worker, and a job already running, so everything else queues up.
+	h := newHarness(t, runner, 1, "S/hevc1.mkv", "S/hevc2.mkv", "S/copy.mkv")
+
+	// Two sources that need encoding and one that only needs its container
+	// swapped. The prober here answers for every path, so the distinction
+	// comes from the options: burning forces an encode.
+	h.q.prober = fakeProber{info: h264Only()}
+	h.q.subtitles = &fakeSubs{path: "/tmp/x.ass"}
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{
+		h.rel(t, "S/hevc1.mkv"), h.rel(t, "S/hevc2.mkv"),
+	}, Options{Subtitles: true, Burn: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the first job to start", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(order) == 1
+	})
+
+	// Now a copy-only job arrives behind an encode that has not started.
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "S/copy.mkv")},
+		Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	close(release)
+	waitFor(t, "everything to finish", func() bool {
+		s := h.states()
+		return s["hevc1.mkv"] == Done && s["hevc2.mkv"] == Done && s["copy.mkv"] == Done
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 3 {
+		t.Fatalf("ran %v", order)
+	}
+	// The running job is never disturbed — this is ordering, not preemption.
+	if order[0] != "hevc1.mkv" {
+		t.Errorf("the running job was displaced: %v", order)
+	}
+	if order[1] != "copy.mkv" {
+		t.Errorf("the copy waited behind an encode: %v", order)
+	}
+}
+
+// A file nothing has looked at yet cannot be told apart from an encode
+// without opening it, and opening every queued file to sort them would cost
+// more than the sorting saves.
+func TestAnUnknownFileWaitsItsTurn(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var order []string
+	runner := fakeRunner{fn: func(ctx context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		mu.Lock()
+		order = append(order, filepath.Base(spec.Src))
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv", "b.mkv", "c.mkv")
+	h.q.prober = fakeProber{info: h264Only(), uncached: true}
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{
+		h.rel(t, "a.mkv"), h.rel(t, "b.mkv"), h.rel(t, "c.mkv"),
+	}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	waitFor(t, "everything to finish", func() bool {
+		s := h.states()
+		return s["a.mkv"] == Done && s["b.mkv"] == Done && s["c.mkv"] == Done
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"a.mkv", "b.mkv", "c.mkv"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("order = %v, want arrival order %v", order, want)
+		}
 	}
 }

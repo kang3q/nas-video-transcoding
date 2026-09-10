@@ -1588,3 +1588,86 @@ func TestBurningIsStillAvailable(t *testing.T) {
 		return false
 	})
 }
+
+// Deleting a conversion should be possible from the list you noticed it in,
+// not only from the file's own page.
+func TestPlayableListCanDiscardAConversion(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mp4")
+	e.srv.prober = stubProber{uncached: true}
+	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.out, "S", "ep1.mp4"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, e.h, "/playable/S").Body.String()
+	if !strings.Contains(body, `action="/discard"`) {
+		t.Fatalf("no way to delete a conversion from the list:\n%s", body)
+	}
+	// A source that was never converted has nothing of ours to delete.
+	if n := strings.Count(body, `action="/discard"`); n != 1 {
+		t.Errorf("got %d delete buttons, want one — only the conversion:\n%s", n, body)
+	}
+
+	rec := post(t, e.h, "/discard", url.Values{
+		"rel": {"S/ep1.mkv"}, "back": {"/playable/S"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/playable/S" {
+		t.Errorf("Location = %q, want the list it was asked from", got)
+	}
+	if _, err := os.Stat(filepath.Join(e.out, "S", "ep1.mp4")); !os.IsNotExist(err) {
+		t.Error("the conversion is still there")
+	}
+	if _, err := os.Stat(filepath.Join(e.src, "S", "ep1.mkv")); err != nil {
+		t.Fatalf("the source was taken with it: %v", err)
+	}
+}
+
+// A conversion whose source is gone can only be named by where it sits.
+func TestAnOrphanConversionCanBeDiscarded(t *testing.T) {
+	e := newEnv(t, false, "keep.mkv")
+	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(e.out, "S", "gone.mp4")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, e.h, "/playable/S").Body.String()
+	if !strings.Contains(body, `name="out" value="S/gone.mp4"`) {
+		t.Fatalf("an orphan offers no way to delete it:\n%s", body)
+	}
+
+	post(t, e.h, "/discard", url.Values{"out": {"S/gone.mp4"}})
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Error("the orphan is still there")
+	}
+}
+
+// "out" reaches into the converted tree, so it has to be as guarded as every
+// other path a client supplies.
+func TestDiscardByOutputPathCannotEscape(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	victim := filepath.Join(e.src, "a.mkv")
+
+	// Traversal is refused outright.
+	for _, bad := range []string{"../media/a.mkv", "..", "a/../../b"} {
+		if rec := post(t, e.h, "/discard", url.Values{"out": {bad}}); rec.Code != http.StatusBadRequest {
+			t.Errorf("%q got %d, want 400", bad, rec.Code)
+		}
+	}
+	// An absolute path is read as being inside the output tree, not as the
+	// filesystem root, so it can only ever miss.
+	post(t, e.h, "/discard", url.Values{"out": {"/etc/passwd"}})
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("a source outside the output tree was deleted: %v", err)
+	}
+	if _, err := os.Stat("/etc/passwd"); err != nil {
+		t.Fatalf("something outside the library entirely was deleted: %v", err)
+	}
+}

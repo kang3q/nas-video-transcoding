@@ -178,6 +178,17 @@ func (m *Mapper) Output(r Rel) string {
 // with no marker file and no window where a half-written file looks finished.
 func (m *Mapper) Partial(r Rel) string { return m.Output(r) + ".part" }
 
+// RemoveOutput deletes a file from the converted tree through its root, so
+// the kernel refuses anything that would land outside it. ParseRel already
+// rejects traversal, but a delete is the one operation where being wrong is
+// unrecoverable, and two guarantees cost nothing.
+func (m *Mapper) RemoveOutput(r Rel) error {
+	if r.IsRoot() {
+		return fmt.Errorf("%w: refusing to remove the output root", ErrBadPath)
+	}
+	return m.outHandle.Remove(r.s)
+}
+
 // OutputDir is the mirrored directory for a source directory.
 func (m *Mapper) OutputDir(r Rel) string {
 	return filepath.Join(m.outRoot, filepath.FromSlash(r.s))

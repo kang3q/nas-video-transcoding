@@ -604,30 +604,53 @@ func (s *Server) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, "요청을 읽을 수 없습니다")
 		return
 	}
-	rel, err := s.mapper.ParseRel(r.FormValue("rel"))
-	if err != nil || rel.IsRoot() {
-		s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
-		return
+	// A conversion is normally reached through the source it was made from.
+	// One whose source has been renamed or deleted can only be named by where
+	// it actually sits, so "out" addresses the converted tree directly.
+	var target, back string
+	var remove func() error
+	if outRel := r.FormValue("out"); outRel != "" {
+		rel, err := s.mapper.ParseRel(outRel)
+		if err != nil || rel.IsRoot() {
+			s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
+			return
+		}
+		target = rel.String()
+		remove = func() error { return s.mapper.RemoveOutput(rel) }
+		back = "/playable/" + rel.Dir().String()
+	} else {
+		rel, err := s.mapper.ParseRel(r.FormValue("rel"))
+		if err != nil || rel.IsRoot() {
+			s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
+			return
+		}
+		// Deleting the output from under a running ffmpeg would leave it
+		// writing to a file nobody can find, and the rename at the end would
+		// put the old name back anyway.
+		if v, ok := s.queue.ByRel(rel); ok && !v.State.Terminal() {
+			s.fail(w, http.StatusConflict,
+				"지금 변환 중인 파일입니다. 먼저 변환을 중단한 뒤 지우세요.")
+			return
+		}
+		path := s.mapper.Output(rel)
+		target = rel.String()
+		remove = func() error { return os.Remove(path) }
+		back = "/watch/" + rel.String()
 	}
 
-	// Deleting the output from under a running ffmpeg would leave it writing
-	// to a file nobody can find, and the rename at the end would put the old
-	// name back anyway.
-	if v, ok := s.queue.ByRel(rel); ok && !v.State.Terminal() {
-		s.fail(w, http.StatusConflict,
-			"지금 변환 중인 파일입니다. 먼저 변환을 중단한 뒤 지우세요.")
-		return
-	}
-
-	if err := os.Remove(s.mapper.Output(rel)); err != nil && !os.IsNotExist(err) {
+	if err := remove(); err != nil && !os.IsNotExist(err) {
 		s.fail(w, http.StatusInternalServerError, "지우지 못했습니다: "+err.Error())
 		return
 	}
-	log.Printf("discarded conversion: %s", rel.String())
+	log.Printf("discarded conversion: %s", target)
 	s.forgetIndex() // one fewer thing to watch, and the listing knows it
 
-	// Back to the same page, which now offers to convert it again.
-	http.Redirect(w, r, (&url.URL{Path: "/watch/" + rel.String()}).String(), http.StatusSeeOther)
+	// Back where it was asked for. From a file's own page that page now
+	// offers to make it again; from a listing, the listing without it.
+	if to := r.FormValue("back"); to != "" && strings.HasPrefix(to, "/") && !strings.HasPrefix(to, "//") {
+		back = to
+	}
+	http.Redirect(w, r, (&url.URL{Path: back}).String(), http.StatusSeeOther)
 }
 
 func redirectBack(w http.ResponseWriter, r *http.Request, def string) {

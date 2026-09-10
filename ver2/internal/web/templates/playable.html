@@ -41,6 +41,17 @@
       {{if .Converted}}<span class="tag done">변환본</span>{{else}}<span class="tag">원본 그대로</span>{{end}}
       {{if .Guessed}}<span class="tag">확장자로 추정</span>{{end}}
     </div>
+    {{if or .DiscardRel .DiscardOut}}
+    <div class="actions">
+      <form method="post" action="/discard"
+            onsubmit="return confirm('변환본을 지웁니다. 원본은 그대로입니다. 계속할까요?')">
+        {{if .DiscardRel}}<input type="hidden" name="rel" value="{{.DiscardRel}}">{{end}}
+        {{if .DiscardOut}}<input type="hidden" name="out" value="{{.DiscardOut}}">{{end}}
+        <input type="hidden" name="back" value="{{.Back}}">
+        <button class="danger small">변환본 지우기</button>
+      </form>
+    </div>
+    {{end}}
   </li>
   {{end}}
 </ul>

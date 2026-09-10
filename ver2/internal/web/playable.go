@@ -37,6 +37,14 @@ type playableRow struct {
 	// Guessed marks a file judged by its extension because nothing has ever
 	// looked inside it. Some of those .mp4 files hold HEVC and will not play.
 	Guessed bool
+
+	// DiscardRel names the source to delete the conversion of, and
+	// DiscardOut the conversion itself when its source is gone. Only one is
+	// ever set, and only on a row we made.
+	DiscardRel string
+	DiscardOut string
+	// Back is where to return to after deleting.
+	Back string
 }
 
 type playableDir struct {
@@ -104,9 +112,11 @@ func (s *Server) buildIndex(gen uint64) *playableIndex {
 		row := playableRow{
 			Name: e.Name, Size: e.Size, Converted: isConverted,
 			Href: (&url.URL{Path: "/watch/" + e.Rel.String()}).String(),
+			Back: (&url.URL{Path: "/playable/" + e.Rel.Dir().String()}).String(),
 		}
 		if isConverted {
 			row.Size = out.Size
+			row.DiscardRel = e.Rel.String()
 		} else if !s.probed(e) {
 			row.Guessed = true
 			ix.unprobed++
@@ -122,7 +132,9 @@ func (s *Server) buildIndex(gen uint64) *playableIndex {
 		}
 		ix.add(e.Rel.Dir().String(), playableRow{
 			Name: e.Name, Size: e.Size, Converted: true,
-			Href: s.sign("/media/" + e.Rel.String()),
+			Href:       s.sign("/media/" + e.Rel.String()),
+			DiscardOut: e.Rel.String(),
+			Back:       (&url.URL{Path: "/playable/" + e.Rel.Dir().String()}).String(),
 		})
 	}
 

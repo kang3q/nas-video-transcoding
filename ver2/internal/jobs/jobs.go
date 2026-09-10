@@ -195,6 +195,10 @@ type Event struct {
 // what lets the scheduling be tested without ffprobe on the machine.
 type Prober interface {
 	Probe(ctx context.Context, path string, fi os.FileInfo) (mediainfo.Info, error)
+	// Cached answers from what has already been learned, or not at all. The
+	// dispatcher uses it to tell a few seconds of copying from forty minutes
+	// of encoding without paying to find out.
+	Cached(path string, fi os.FileInfo) (mediainfo.Info, bool)
 }
 
 type Queue struct {
@@ -579,6 +583,51 @@ func (q *Queue) emit(ev Event) {
 
 // --- dispatch ---
 
+// pickLocked chooses which waiting job runs next.
+//
+// Order is arrival order, with one exception: a job that only has to change
+// the container jumps the ones that have to re-encode. The two are not the
+// same kind of work. Copying the streams of an episode takes a few seconds;
+// re-encoding one takes forty minutes on this hardware. Leaving a three
+// second job behind a forty minute one, when the whole point of it was to
+// add subtitles to something watchable tonight, makes the queue useless for
+// exactly the case it was quickest at.
+//
+// This is not the preemption v1 had, which killed work already in progress.
+// Nothing running is touched; only the order of what has not started.
+//
+// A job is known to be a copy only if its source has been probed before.
+// Probing here to find out would cost more than the reordering saves — it is
+// what made v1 take half a minute to list a folder — so an unexamined file
+// simply waits its turn. In practice the ones this matters for have just
+// been looked at on their own page.
+func (q *Queue) pickLocked() int {
+	for i, id := range q.pending {
+		j, ok := q.jobs[id]
+		if !ok {
+			continue
+		}
+		if q.copyOnly(j) {
+			return i
+		}
+	}
+	return 0
+}
+
+// copyOnly reports whether this job can be done without an encoder, judged
+// from what is already known. It never opens anything.
+func (q *Queue) copyOnly(j *Job) bool {
+	if j.opts.Burn {
+		return false // drawing subtitles in means redrawing every frame
+	}
+	fi, err := os.Stat(j.src)
+	if err != nil {
+		return false
+	}
+	info, ok := q.prober.Cached(j.src, fi)
+	return ok && info.RemuxOnly()
+}
+
 func (q *Queue) nudge() {
 	select {
 	case q.wake <- struct{}{}:
@@ -594,8 +643,9 @@ func (q *Queue) dispatchLoop() {
 				q.mu.Unlock()
 				break
 			}
-			id := q.pending[0]
-			q.pending = q.pending[1:]
+			at := q.pickLocked()
+			id := q.pending[at]
+			q.pending = append(q.pending[:at], q.pending[at+1:]...)
 			j, ok := q.jobs[id]
 			if !ok {
 				q.mu.Unlock()
