@@ -133,6 +133,12 @@ func main() {
 	log.Printf("workers=%d threads=%d preset=%s v=%s a=%s checkpoint=%d%%",
 		cfg.Workers, cfg.Threads, cfg.Preset, cfg.VideoBitrate, cfg.AudioBitrate, cfg.CheckpointPercent)
 	log.Printf("live preview=%v segment=%ds", cfg.Live, cfg.SegmentSecs)
+	if cfg.User != "" {
+		log.Printf("basic auth: on (user %q). AirPlay cannot use it — the Apple TV "+
+			"fetches the file itself and has no credentials to send.", cfg.User)
+	} else {
+		log.Print("basic auth: off")
+	}
 	if tg.Enabled() {
 		log.Printf("telegram: on, public url=%q", cfg.PublicBaseURL)
 		if cfg.PublicBaseURL == "" {

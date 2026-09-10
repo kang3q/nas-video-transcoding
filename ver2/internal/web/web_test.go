@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1166,3 +1167,70 @@ func TestAirPlayProbesAreNotPersisted(t *testing.T) {
 		t.Error("a diagnostic batch was written to the saved queue")
 	}
 }
+
+// --- the access log ---
+
+// A client being turned away and a client that never arrived look the same in
+// a log that only records what got past authentication, and they have nothing
+// in common as causes. AirPlay is exactly this case: the Apple TV fetches the
+// file itself, with none of the browser's credentials.
+func TestRejectedRequestsAreStillLogged(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	e.srv.cfg.User, e.srv.cfg.Pass = "u", "p"
+	e.srv.cfg.LogRequests = true
+
+	var out strings.Builder
+	log.SetOutput(&out)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	h := e.srv.Handler()
+	req := httptest.NewRequest("GET", "/media/a.mp4", nil)
+	req.RemoteAddr = "192.168.0.44:51000"
+	req.Header.Set("User-Agent", "AppleCoreMedia/1.0.0.21K69 (Apple TV; U; CPU OS 17_2)")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	line := out.String()
+	if !strings.Contains(line, "401") {
+		t.Errorf("the log does not say it was refused: %q", line)
+	}
+	if !strings.Contains(line, "192.168.0.44") {
+		t.Errorf("the log does not say who was refused: %q", line)
+	}
+	if !strings.Contains(line, "AppleCoreMedia") {
+		t.Errorf("the log does not say what was refused: %q", line)
+	}
+}
+
+// The event stream is chunked and depends on Flush reaching the real writer.
+// A logging wrapper that swallowed it would freeze every progress bar.
+func TestTheLogWrapperStillFlushes(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	e.srv.cfg.LogRequests = true
+
+	var flushed bool
+	rec := &flushProbe{ResponseRecorder: httptest.NewRecorder(), onFlush: func() { flushed = true }}
+	h := e.srv.logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("the wrapper hid Flusher from the handler")
+			return
+		}
+		f.Flush()
+	}))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/jobs", nil))
+	if !flushed {
+		t.Error("Flush did not reach the real writer")
+	}
+}
+
+type flushProbe struct {
+	*httptest.ResponseRecorder
+	onFlush func()
+}
+
+func (f *flushProbe) Flush() { f.onFlush() }

@@ -18,6 +18,7 @@ import (
 	"html/template"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -112,7 +113,11 @@ func (s *Server) Handler() http.Handler {
 		fmt.Fprintln(w, "ok")
 	})
 
-	return s.basicAuth(s.logRequests(mux))
+	// Logging goes outside authentication, not inside it. With the order the
+	// other way a rejected request never reached the log, so a client being
+	// turned away looked exactly like a client that never arrived — and those
+	// two have completely different causes.
+	return s.logRequests(s.basicAuth(mux))
 }
 
 // --- middleware ---
@@ -139,13 +144,88 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Media and event traffic is constant and says nothing useful.
-		if !strings.HasPrefix(r.URL.Path, "/static/") &&
-			!strings.HasPrefix(r.URL.Path, "/api/events") {
-			log.Printf("%s %s", r.Method, r.URL.Path)
+		// Static assets and the event stream are constant and say nothing.
+		quiet := strings.HasPrefix(r.URL.Path, "/static/") ||
+			strings.HasPrefix(r.URL.Path, "/api/events")
+		if quiet {
+			next.ServeHTTP(w, r)
+			return
 		}
-		next.ServeHTTP(w, r)
+
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		// The status and the caller are the whole point when something is
+		// fetching a file and failing: a 401 means it was turned away, and no
+		// line at all means it never got here. Media requests carry who asked,
+		// because AirPlay is the Apple TV fetching the file itself — it
+		// arrives as a different client than the browser that started it.
+		if mediaPathPrefix(r.URL.Path) {
+			log.Printf("%s %s -> %d  from %s  %s",
+				r.Method, r.URL.Path, rec.status, host(r.RemoteAddr), agent(r))
+			return
+		}
+		log.Printf("%s %s -> %d", r.Method, r.URL.Path, rec.status)
 	})
+}
+
+// mediaPathPrefix reports whether a path serves bytes of video, which are the
+// requests worth knowing the caller of.
+func mediaPathPrefix(p string) bool {
+	return strings.HasPrefix(p, "/media/") ||
+		strings.HasPrefix(p, "/source/") ||
+		strings.HasPrefix(p, "/live/")
+}
+
+func host(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
+
+// agent keeps enough of the User-Agent to tell an Apple TV fetching a file
+// ("AppleCoreMedia/...") from the browser that asked it to.
+func agent(r *http.Request) string {
+	ua := r.UserAgent()
+	if ua == "" {
+		return "(no user-agent)"
+	}
+	if i := strings.IndexByte(ua, ' '); i > 0 {
+		ua = ua[:i]
+	}
+	if len(ua) > 40 {
+		ua = ua[:40]
+	}
+	return ua
+}
+
+// statusRecorder remembers what was actually sent. It has to pass Flush
+// through: the event stream depends on it, and a wrapper that swallowed it
+// would leave the progress bars frozen.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.wrote {
+		s.status = code
+		s.wrote = true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	s.wrote = true
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // --- shared rendering ---
