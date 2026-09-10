@@ -442,6 +442,10 @@ func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, a
 		os.Remove(out)
 		return "", withFFmpegOutput(err, said, "")
 	}
+	if err := repair(out, f, rel.Base()); err != nil {
+		os.Remove(out)
+		return "", err
+	}
 	return out, nil
 }
 
@@ -487,7 +491,28 @@ func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string, f 
 		os.Remove(out)
 		return "", withFFmpegOutput(err, said, firstLine(text))
 	}
+	if err := repair(out, f, rel.Base()); err != nil {
+		os.Remove(out)
+		return "", err
+	}
 	return out, nil
+}
+
+// repair fixes what a muxer downstream would refuse. Only SRT needs it: an
+// unbounded cue is a SAMI habit, and it is on the way to an MP4 that the
+// duration becomes fatal.
+func repair(path string, f Format, name string) error {
+	if f != FormatSRT {
+		return nil
+	}
+	n, err := repairSRT(path)
+	if err != nil {
+		return fmt.Errorf("subs: repairing %s: %w", name, err)
+	}
+	if n > 0 {
+		log.Printf("subtitle timings repaired in %s: %d cue(s) had no usable end", name, n)
+	}
+	return nil
 }
 
 // withFFmpegOutput attaches whatever ffmpeg had to say, and failing that the

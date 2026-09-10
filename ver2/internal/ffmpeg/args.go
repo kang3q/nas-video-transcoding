@@ -181,6 +181,12 @@ func teeSpec(s Spec) string {
 		// The MP4 must survive the HLS branch failing, so only the HLS branch
 		// is allowed to fail quietly, and it runs on its own thread.
 		"onfail=ignore",
+		// Picture and sound only. In HLS a subtitle is a separate rendition
+		// with its own playlist, so handing this one a third stream makes it
+		// refuse the lot: "Exactly one WebVTT stream is needed". The preview
+		// then dies at the first packet. The subtitle track belongs to the
+		// MP4, which is what anybody watches with subtitles on anyway.
+		"select=v\\,a",
 		"use_fifo=1",
 		"f=hls",
 		"hls_time=" + strconv.Itoa(secs),

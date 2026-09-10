@@ -178,7 +178,7 @@ func TestArgsLiveUsesTee(t *testing.T) {
 		t.Errorf("the hls branch is missing: %s", spec)
 	}
 	// The MP4 is the artifact; only the live branch may fail quietly.
-	if !strings.Contains(spec, "onfail=ignore:use_fifo=1:f=hls") {
+	if !strings.Contains(spec, "onfail=ignore:") || !strings.Contains(spec, ":use_fifo=1:f=hls") {
 		t.Errorf("hls branch is not isolated: %s", spec)
 	}
 	if strings.Contains(spec, "[f=mp4:onfail=ignore]") {
@@ -452,5 +452,27 @@ func TestSoftSubtitlesAlsoWorkWhenEncoding(t *testing.T) {
 	}
 	if strings.Contains(got, "subtitles=") {
 		t.Errorf("it burned them in instead:\n%s", got)
+	}
+}
+
+// In HLS a subtitle is a separate rendition with its own playlist. Handing
+// the live branch a third stream makes it refuse everything — "Exactly one
+// WebVTT stream is needed" — and the preview dies at the first packet. The
+// subtitle belongs to the MP4, which is what anybody watches with subtitles
+// on anyway.
+func TestTheLiveBranchTakesOnlyPictureAndSound(t *testing.T) {
+	spec := teeSpec(Spec{
+		Dst: "/out/a.mp4.part", LiveDir: "/state/live/j1", SegmentSecs: 4,
+		SoftSubs: "/state/subs/j1.srt",
+	})
+	mp4, hls, ok := strings.Cut(spec, "|")
+	if !ok {
+		t.Fatalf("not two branches: %s", spec)
+	}
+	if !strings.Contains(hls, `select=v\,a`) {
+		t.Errorf("the live branch was given every stream:\n%s", hls)
+	}
+	if strings.Contains(mp4, "select=") {
+		t.Errorf("the MP4 lost a stream it should keep:\n%s", mp4)
 	}
 }
