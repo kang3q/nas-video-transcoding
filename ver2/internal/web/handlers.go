@@ -441,6 +441,7 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
 
 	picked := r.FormValue("subs")
 	opts := jobs.Options{
+		Burn:             r.FormValue("burn") != "",
 		Live:             s.cfg.Live && r.FormValue("nolive") == "",
 		Subtitles:        picked != "",
 		PickedSubtitleID: picked,

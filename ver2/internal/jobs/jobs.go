@@ -62,6 +62,11 @@ type Options struct {
 	// finishes. Costs a little disk and almost no CPU: the encode happens once
 	// either way.
 	Live bool
+
+	// Burn draws the subtitle into the frames instead of carrying it as a
+	// track. It is the only way to be sure every player shows it, and it
+	// costs a full re-encode of a file that may have needed none.
+	Burn bool
 }
 
 // SubResolver produces the subtitle file to burn into one video, or "" when
@@ -714,8 +719,13 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 	// A diagnostic clip is its own thing: no subtitles, no remux shortcut, no
 	// live rendition. Each of those is a way for the test to fail for a reason
 	// that has nothing to do with what it is testing.
-	// Burning subtitles means redrawing every frame, so the copy shortcut is
-	// off however convenient the codecs are.
+	// Burning means redrawing every frame, so the copy shortcut is off however
+	// convenient the codecs are. Carrying the subtitle as its own track does
+	// not touch the picture, so the shortcut survives.
+	soft := ""
+	if !j.opts.Burn {
+		soft, burn = burn, ""
+	}
 	remux := info.RemuxOnly() && burn == ""
 
 	j.setPlan(time.Duration(info.Duration*float64(time.Second)), remux)
@@ -726,11 +736,22 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 		VideoIndex:  video.Index,
 		AudioIndex:  audioIdx,
 		BurnSubs:    burn,
+		SoftSubs:    soft,
+		SubsLang:    subtitleLang(j),
 		Width:       video.Width,
 		Height:      video.Height,
 		LiveDir:     j.liveDir,
 		SegmentSecs: q.segmentSecs,
 	}, cleanup, nil
+}
+
+// subtitleLang is what to tag a soft subtitle track with, so a player names
+// it rather than calling it "Track 1".
+func subtitleLang(j *Job) string {
+	if j.opts.SubtitleLang != "" {
+		return j.opts.SubtitleLang
+	}
+	return "kor"
 }
 
 func (q *Queue) onProgress(j *Job, p ffmpeg.Progress) {

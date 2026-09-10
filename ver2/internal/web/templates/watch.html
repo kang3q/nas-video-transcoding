@@ -81,8 +81,9 @@
   </summary>
   {{if .PlaysAsIs}}
     <p class="hint">
-      이 파일은 변환하지 않아도 재생됩니다. 자막을 화면에 굽고 싶을 때만
-      의미가 있고, 그러면 영상을 다시 그려야 하므로 시간이 걸립니다.
+      이 파일은 변환하지 않아도 재생됩니다. 자막을 넣고 싶을 때 의미가 있고,
+      <strong>자막 트랙으로</strong> 넣으면 화면을 다시 그리지 않으므로 몇 초면
+      끝납니다.
     </p>
   {{else if not .Probed}}
     <p class="hint">파일 내용을 아직 확인하지 못했습니다.</p>
@@ -101,8 +102,8 @@
     {{end}}
     {{if .Subs}}
     <fieldset class="subs">
-      <legend>자막 굽기</legend>
-      <label><input type="radio" name="subs" value="" {{if not .DefaultSub}}checked{{end}}> 굽지 않음</label>
+      <legend>넣을 자막</legend>
+      <label><input type="radio" name="subs" value="" {{if not .DefaultSub}}checked{{end}}> 넣지 않음</label>
       {{range .Subs}}
         <label{{if not .Burnable}} class="off"{{end}}>
           <input type="radio" name="subs" value="{{.ID}}"
@@ -116,13 +117,27 @@
       {{if .DefaultSub}}
         한글 자막이 있어 그것으로 골라두었습니다.
       {{else}}
-        한글 자막이 없어 <strong>굽지 않음</strong>으로 두었습니다. 다른 언어를 구우려면
+        한글 자막이 없어 <strong>넣지 않음</strong>으로 두었습니다. 다른 언어를 넣으려면
         직접 고르세요.
       {{end}}
-      구운 자막은 끌 수 없고, 영상을 다시 그려야 하므로 컨테이너만 바꾸면 될 파일도
-      전체 재인코딩이 됩니다. 여러 편을 한 번에 변환하면 <strong>나머지 편은
-      고른 언어를 자동으로 찾아</strong> 굽습니다.
+      여러 편을 한 번에 변환하면 <strong>나머지 편은 고른 언어를 자동으로 찾습니다.</strong>
     </p>
+
+    <fieldset class="subs">
+      <legend>자막을 넣는 방식</legend>
+      <label>
+        <input type="radio" name="burn" value="" checked>
+        <strong>자막 트랙으로</strong> — 재생기에서 켜고 끕니다. 화면을 다시 그리지
+        않으므로 <strong>컨테이너만 바꾸면 되는 파일은 몇 초</strong>면 끝납니다.
+        애플TV 와 사파리는 이 트랙을 읽습니다. 크롬은 못 읽습니다.
+      </label>
+      <label>
+        <input type="radio" name="burn" value="1">
+        <strong>화면에 굽기</strong> — 그림에 박아 넣어 <strong>어디서든 보이지만
+        끌 수 없습니다.</strong> 모든 프레임을 다시 그려야 하므로 컨테이너만 바꾸면
+        될 파일도 전체 재인코딩이 됩니다.
+      </label>
+    </fieldset>
     {{end}}
     <p class="hint">
       아래 셋 중 무엇을 눌러도 <strong>이 파일이 가장 먼저</strong> 변환됩니다.

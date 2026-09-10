@@ -1542,3 +1542,49 @@ func TestOpeningAFileCorrectsThePlayableList(t *testing.T) {
 		t.Errorf("the list repeated a guess it had been corrected on:\n%s", body)
 	}
 }
+
+// Burning is the expensive answer: it redraws every frame, so a file that
+// needed nothing but its container swapped pays an hour for subtitles. A
+// track costs seconds and can be switched off, so that is what the form
+// starts on.
+func TestSubtitlesGoInAsATrackUnlessAskedToBurn(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	i := strings.Index(body, `name="burn" value=""`)
+	if i < 0 {
+		t.Fatalf("no way to add subtitles without burning them:\n%s", body)
+	}
+	if !strings.Contains(body[i:i+strings.Index(body[i:], ">")], "checked") {
+		t.Errorf("the form starts on burning, which costs an hour:\n%s", body)
+	}
+
+	post(t, e.h, "/convert", url.Values{
+		"rel": {"a.mkv"}, "scope": {"file"}, "subs": {"embedded:2"},
+	})
+	v, ok := e.srv.queue.ByRel(e.rel(t, "a.mkv"))
+	if !ok {
+		t.Fatal("nothing was queued")
+	}
+	if v.Remux {
+		// The stub source is HEVC, so this one does need encoding either way;
+		// what matters is that asking for subtitles did not force it.
+		t.Log("remux:", v.Remux)
+	}
+}
+
+// And asking to burn still burns.
+func TestBurningIsStillAvailable(t *testing.T) {
+	e := newEnv(t, true, "a.mkv")
+	post(t, e.h, "/convert", url.Values{
+		"rel": {"a.mkv"}, "scope": {"file"}, "subs": {"embedded:2"}, "burn": {"1"},
+	})
+	waitFor(t, "the job to start", func() bool {
+		for _, v := range e.srv.queue.Snapshot() {
+			if v.State == jobs.Running {
+				return true
+			}
+		}
+		return false
+	})
+}

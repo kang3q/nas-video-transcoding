@@ -51,6 +51,14 @@ type Spec struct {
 	// be somewhere safe and simple — see [FilterPath] for why.
 	BurnSubs string
 
+	// SoftSubs carries a subtitle file into the MP4 as a track of its own
+	// rather than drawing it into the frames. It costs seconds instead of an
+	// hour, because the picture is untouched, and it can be switched off
+	// while watching. Only one of BurnSubs and SoftSubs is ever set.
+	SoftSubs string
+	// SubsLang tags that track, so a player offers it by name.
+	SubsLang string
+
 	// Width and Height are the source's, and decide whether it has to be
 	// scaled down. H.264 above 1080p is outside what an Apple TV will play,
 	// and writing a 4K frame with a level that claims otherwise produces a
@@ -72,20 +80,33 @@ func Args(s Spec, set Settings) []string {
 		"-i", s.Src,
 	}
 
+	if s.SoftSubs != "" {
+		a = append(a, "-i", s.SoftSubs)
+	}
+
 	a = append(a, "-map", fmt.Sprintf("0:%d", s.VideoIndex))
 	if s.AudioIndex >= 0 {
 		a = append(a, "-map", fmt.Sprintf("0:%d", s.AudioIndex))
 	}
+	if s.SoftSubs != "" {
+		a = append(a, "-map", "1:0")
+	}
 	a = append(a, "-map_metadata", "0")
 
-	// Subtitles and data streams are already excluded by mapping only the two
-	// streams we want, but saying so costs nothing and survives someone
+	// Data streams, and any subtitles in the source, are already excluded by
+	// mapping only what we want. Saying so costs nothing and survives someone
 	// changing the mapping later.
-	a = append(a, "-sn", "-dn")
+	a = append(a, "-dn")
+	if s.SoftSubs == "" {
+		a = append(a, "-sn")
+	}
 
 	switch {
 	case s.Remux && s.BurnSubs == "":
-		a = append(a, "-c", "copy")
+		// The picture and sound are already what we want; only the container
+		// is wrong. Adding a subtitle track does not change that — it is
+		// still seconds rather than an hour.
+		a = append(a, "-c:v", "copy", "-c:a", "copy")
 	default:
 		if set.Threads > 0 {
 			a = append(a, "-threads", strconv.Itoa(set.Threads))
@@ -121,6 +142,16 @@ func Args(s Spec, set Settings) []string {
 				"-ac", strconv.Itoa(set.AudioChannels),
 				"-ar", strconv.Itoa(set.AudioRate),
 			)
+		}
+	}
+
+	if s.SoftSubs != "" {
+		// mov_text is the subtitle format an MP4 can hold and an Apple TV can
+		// switch on. Styling from an ASS file is lost in the conversion; the
+		// words are what matter here.
+		a = append(a, "-c:s", "mov_text")
+		if s.SubsLang != "" {
+			a = append(a, "-metadata:s:s:0", "language="+s.SubsLang)
 		}
 	}
 

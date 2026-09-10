@@ -54,7 +54,7 @@ func TestArgsRemuxPath(t *testing.T) {
 		Remux: true, VideoIndex: 0, AudioIndex: 1,
 	}, testSettings))
 
-	if !strings.Contains(got, " -c copy ") {
+	if !strings.Contains(got, " -c:v copy ") || !strings.Contains(got, " -c:a copy ") {
 		t.Errorf("remux is not copying:\n%s", got)
 	}
 	if strings.Contains(got, "libx264") || strings.Contains(got, " -c:a aac ") {
@@ -402,4 +402,55 @@ func fakeFFmpeg(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// Carrying subtitles as a track of their own costs seconds, because the
+// picture is never touched. Burning them costs an hour. For a file that
+// already holds what we want, that is the whole difference.
+func TestSoftSubtitlesRideAlongWithARemux(t *testing.T) {
+	got := argLine(Args(Spec{
+		Src: "/media/a.mp4", Dst: "/out/a.mp4.part",
+		Remux: true, VideoIndex: 0, AudioIndex: 1,
+		SoftSubs: "/state/subs/x.ass", SubsLang: "kor",
+	}, testSettings))
+
+	for _, want := range []string{
+		" -i /media/a.mp4 ", " -i /state/subs/x.ass ",
+		" -map 0:0 ", " -map 0:1 ", " -map 1:0 ",
+		" -c:v copy ", " -c:a copy ", " -c:s mov_text ",
+		" -metadata:s:s:0 language=kor ",
+		" -movflags +faststart ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// -sn would throw away the track we just added, and no encoder should
+	// have been woken up.
+	if strings.Contains(got, " -sn ") {
+		t.Errorf("subtitles were dropped after being added:\n%s", got)
+	}
+	if strings.Contains(got, "libx264") || strings.Contains(got, "subtitles=") {
+		t.Errorf("a soft subtitle track started a re-encode:\n%s", got)
+	}
+}
+
+// A file that needs re-encoding anyway can still take its subtitles as a
+// track rather than into the picture.
+func TestSoftSubtitlesAlsoWorkWhenEncoding(t *testing.T) {
+	got := argLine(Args(Spec{
+		Src: "/media/a.avi", Dst: "/out/a.mp4.part",
+		VideoIndex: 0, AudioIndex: 1,
+		SoftSubs: "/state/subs/x.ass", SubsLang: "kor",
+	}, testSettings))
+
+	if !strings.Contains(got, "libx264") {
+		t.Errorf("this one does need the encoder:\n%s", got)
+	}
+	if !strings.Contains(got, " -c:s mov_text ") {
+		t.Errorf("the subtitle track was lost:\n%s", got)
+	}
+	if strings.Contains(got, "subtitles=") {
+		t.Errorf("it burned them in instead:\n%s", got)
+	}
 }

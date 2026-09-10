@@ -516,7 +516,7 @@ func TestBurningSubtitlesDisablesRemux(t *testing.T) {
 	h.q.subtitles = resolver
 
 	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
-		Options{Subtitles: true, PickedSubtitleID: "embedded:2"}); err != nil {
+		Options{Subtitles: true, Burn: true, PickedSubtitleID: "embedded:2"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
@@ -722,5 +722,39 @@ func TestOnlyTheFirstFileGetsAPreview(t *testing.T) {
 		if v.Name != "ep1.mkv" && v.Live {
 			t.Errorf("%s reports a live preview it does not have", v.Name)
 		}
+	}
+}
+
+// Carrying the subtitle as a track of its own leaves the picture alone, so a
+// file that only needed its container swapped still only needs that — seconds
+// rather than the hour burning would cost.
+func TestASoftSubtitleKeepsTheRemuxShortcut(t *testing.T) {
+	var gotRemux bool
+	var gotBurn, gotSoft, gotLang string
+	runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+		gotRemux, gotBurn, gotSoft, gotLang = spec.Remux, spec.BurnSubs, spec.SoftSubs, spec.SubsLang
+		return writeOutput(spec)
+	}}
+	h := newHarness(t, runner, 1, "a.mkv")
+	h.q.prober = fakeProber{info: h264Only()}
+	h.q.subtitles = &fakeSubs{path: "/tmp/x.ass"}
+
+	if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
+		Options{Subtitles: true, PickedSubtitleID: "embedded:2", SubtitleLang: "kor"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
+
+	if !gotRemux {
+		t.Error("adding a subtitle track threw away the stream copy")
+	}
+	if gotSoft != "/tmp/x.ass" {
+		t.Errorf("SoftSubs = %q, want the prepared file", gotSoft)
+	}
+	if gotBurn != "" {
+		t.Errorf("BurnSubs = %q, want nothing drawn into the picture", gotBurn)
+	}
+	if gotLang != "kor" {
+		t.Errorf("SubsLang = %q, so a player would not name the track", gotLang)
 	}
 }
