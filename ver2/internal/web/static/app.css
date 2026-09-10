@@ -117,3 +117,10 @@ details.convert > summary {
 }
 details.convert[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0.8rem; }
 details.convert > *:last-child { margin-bottom: 0.9rem; }
+
+/* The playable list groups by folder, so the folder has to read as a heading
+   rather than as another row. */
+section.group { margin: 1.4rem 0; }
+section.group > h2 { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.3rem; }
+section.group > h2 > a { color: var(--muted); text-decoration: none; }
+section.group > h2 > a:hover { text-decoration: underline; }

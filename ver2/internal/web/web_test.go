@@ -43,6 +43,13 @@ func (s stubProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) {
 	return s.info, true
 }
 
+func (s stubProber) CachedAt(string, int64, int64) (mediainfo.Info, bool) {
+	if s.uncached {
+		return mediainfo.Info{}, false
+	}
+	return s.info, true
+}
+
 type stubRunner struct {
 	mu    sync.Mutex
 	seen  []string
@@ -1033,6 +1040,13 @@ func (p *countingProber) Cached(string, os.FileInfo) (mediainfo.Info, bool) {
 	return p.info, true
 }
 
+func (p *countingProber) CachedAt(string, int64, int64) (mediainfo.Info, bool) {
+	if !p.cached {
+		return mediainfo.Info{}, false
+	}
+	return p.info, true
+}
+
 func (p *countingProber) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1441,5 +1455,85 @@ func TestTheHeaderOffersTheConvertedLibrary(t *testing.T) {
 		if !strings.Contains(body, `href="/converted/"`) {
 			t.Errorf("%s has no link to the converted library", path)
 		}
+	}
+}
+
+// --- everything that plays right now ---
+
+// One list of what can be watched, drawn from both sides: what was converted,
+// and what never needed converting.
+func TestPlayableListsBothKinds(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mp4", "S/ep3.avi", "T/ep1.mkv")
+	// Nothing has been looked inside, so sources fall back to the extension
+	// rule: a .mp4 is taken at its word and nothing else is. ep1 gets a real
+	// conversion, which needs no such guess.
+	e.srv.prober = stubProber{uncached: true}
+	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.out, "S", "ep1.mp4"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, e.h, "/playable/").Body.String()
+
+	if !strings.Contains(body, "ep1.mkv") {
+		t.Errorf("the converted file is missing:\n%s", body)
+	}
+	if !strings.Contains(body, "ep2.mp4") {
+		t.Errorf("a file that plays as it is was left out:\n%s", body)
+	}
+	if strings.Contains(body, "ep3.avi") {
+		t.Errorf("an .avi nobody has converted was listed as playable:\n%s", body)
+	}
+	if strings.Contains(body, "T/ep1.mkv") {
+		t.Errorf("an unconverted .mkv was listed as playable:\n%s", body)
+	}
+	if !strings.Contains(body, "변환본") || !strings.Contains(body, "원본 그대로") {
+		t.Errorf("the two kinds are not told apart:\n%s", body)
+	}
+	// The folder heading leads back into the library.
+	if !strings.Contains(body, `href="/browse/S"`) {
+		t.Errorf("the folder does not link to the library:\n%s", body)
+	}
+}
+
+// A converted file must appear once, as the conversion — not also as the
+// source it was made from.
+func TestPlayableDoesNotListAFileTwice(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mp4")
+	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.out, "S", "ep1.mp4"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := get(t, e.h, "/playable/").Body.String()
+	if n := strings.Count(body, "ep1.mp4</a>"); n != 1 {
+		t.Errorf("listed %d times, want once:\n%s", n, body)
+	}
+}
+
+// Opening thousands of files to find out what is in them is what made v1 take
+// half a minute to show one folder. This page must read directories only.
+func TestPlayableNeverProbes(t *testing.T) {
+	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mp4", "T/ep3.mkv")
+	p := &countingProber{info: mediainfo.Info{Duration: 100}}
+	e.srv.prober = p
+
+	get(t, e.h, "/playable/")
+	if n := p.count(); n != 0 {
+		t.Errorf("ffprobe ran %d time(s) rendering a list of file names", n)
+	}
+}
+
+// Judging by the extension is a guess, and a page that guesses should say how
+// often — some of those .mp4 files hold HEVC and will not play.
+func TestPlayableSaysHowManyItGuessedAt(t *testing.T) {
+	e := newEnv(t, false, "a.mp4", "b.mp4")
+	e.srv.prober = &countingProber{} // nothing cached
+	body := get(t, e.h, "/playable/").Body.String()
+	if !strings.Contains(body, "확장자만 보고") {
+		t.Errorf("the page does not admit it is guessing:\n%s", body)
 	}
 }

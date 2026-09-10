@@ -44,6 +44,10 @@ func newFinder(t *testing.T, info mediainfo.Info, files ...string) (*Finder, *ou
 	return NewFinder(m, stubProber{info: info}), m, src
 }
 
+func (s stubProber) CachedAt(string, int64, int64) (mediainfo.Info, bool) {
+	return s.info, true
+}
+
 func rel(t *testing.T, m *outpath.Mapper, p string) outpath.Rel {
 	t.Helper()
 	r, err := m.ParseRel(p)

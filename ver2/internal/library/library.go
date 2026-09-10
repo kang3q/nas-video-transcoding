@@ -9,6 +9,7 @@ package library
 import (
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"nvt/ver2/internal/outpath"
@@ -32,6 +33,11 @@ type Entry struct {
 	IsDir   bool
 	IsVideo bool
 	Size    int64
+	// Mod is carried because the probe cache is keyed by it. Reading a
+	// directory already costs a stat per file; making the caller stat them
+	// all again to ask "have we seen this one?" would double the price of
+	// walking a library.
+	Mod time.Time
 }
 
 type Listing struct {
@@ -68,6 +74,7 @@ func (l *Library) List(dir outpath.Rel) (Listing, error) {
 					continue
 				}
 				e.Size = fi.Size()
+				e.Mod = fi.ModTime()
 			}
 			e.IsVideo = IsVideo(rel)
 		}
@@ -116,6 +123,7 @@ func (l *Library) ListOutput(dir outpath.Rel) (Listing, error) {
 				continue
 			}
 			e.Size = fi.Size()
+			e.Mod = fi.ModTime()
 			e.IsVideo = IsVideo(rel)
 		}
 		out = append(out, e)
@@ -128,6 +136,68 @@ func (l *Library) ListOutput(dir outpath.Rel) (Listing, error) {
 		return NaturalLess(out[i].Name, out[j].Name)
 	})
 	return Listing{Dir: dir, Entries: out}, nil
+}
+
+// Walk limits. A library is big but not unbounded, and a tree that turns out
+// to be either is a bug somewhere else — better to show most of it than to
+// spend a minute finding that out.
+const (
+	maxWalkDepth   = 24
+	maxWalkEntries = 50000
+)
+
+// WalkOutput lists every converted file under a directory, at any depth.
+//
+// Only directories are read. Nothing is opened, which is the whole reason
+// this is affordable: a conversion existing is already proof that it plays,
+// so there is nothing to inspect.
+func (l *Library) WalkOutput(root outpath.Rel) []Entry {
+	return l.walk(root, l.ListOutput)
+}
+
+// WalkVideos lists every video in the library, at any depth. Whether each one
+// can be played without converting is a separate question, answered from the
+// probe cache by the caller — it must not be answered by opening files here.
+func (l *Library) WalkVideos(root outpath.Rel) []Entry {
+	return l.walk(root, l.List)
+}
+
+func (l *Library) walk(root outpath.Rel, list func(outpath.Rel) (Listing, error)) []Entry {
+	var out []Entry
+	type step struct {
+		dir   outpath.Rel
+		depth int
+	}
+	queue := []step{{dir: root}}
+
+	for len(queue) > 0 && len(out) < maxWalkEntries {
+		cur := queue[0]
+		queue = queue[1:]
+
+		listing, err := list(cur.dir)
+		if err != nil {
+			continue // unreadable, or gone since the parent was read
+		}
+		for _, e := range listing.Entries {
+			switch {
+			case e.IsDir:
+				if cur.depth < maxWalkDepth {
+					queue = append(queue, step{dir: e.Rel, depth: cur.depth + 1})
+				}
+			case e.IsVideo:
+				out = append(out, e)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		di, dj := out[i].Rel.Dir().String(), out[j].Rel.Dir().String()
+		if di != dj {
+			return NaturalLess(di, dj)
+		}
+		return NaturalLess(out[i].Name, out[j].Name)
+	})
+	return out
 }
 
 // airplayDir is where the diagnostic clips live. Named here rather than

@@ -198,9 +198,16 @@ func (p *Prober) Probe(ctx context.Context, path string, fi os.FileInfo) (Info, 
 // Cached returns a previous result without running ffprobe, for callers that
 // would rather show nothing than block.
 func (p *Prober) Cached(path string, fi os.FileInfo) (Info, bool) {
+	return p.CachedAt(path, fi.Size(), fi.ModTime().Unix())
+}
+
+// CachedAt is Cached for a caller that already knows the size and time. A
+// directory walk has just read both; making it stat every file again to ask
+// whether this one has been seen would double what walking a library costs.
+func (p *Prober) CachedAt(path string, size, modUnix int64) (Info, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	info, ok := p.entries[key(path, fi.Size(), fi.ModTime().Unix())]
+	info, ok := p.entries[key(path, size, modUnix)]
 	return info, ok
 }
 
