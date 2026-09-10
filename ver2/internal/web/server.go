@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"nvt/ver2/internal/config"
+	"nvt/ver2/internal/history"
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -56,6 +57,9 @@ type Server struct {
 	indexMu  sync.Mutex
 	playable *playableIndex
 
+	// history remembers where playback stopped, so it can be picked up.
+	history *history.Store
+
 	cfg    *config.Config
 	mapper *outpath.Mapper
 	lib    *library.Library
@@ -66,8 +70,8 @@ type Server struct {
 	pages map[string]*template.Template
 }
 
-func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Queue, p Prober, f *subs.Finder) (*Server, error) {
-	s := &Server{cfg: cfg, mapper: m, lib: lib, queue: q, prober: p, subs: f}
+func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Queue, p Prober, f *subs.Finder, h *history.Store) (*Server, error) {
+	s := &Server{cfg: cfg, mapper: m, lib: lib, queue: q, prober: p, subs: f, history: h}
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
@@ -83,7 +87,7 @@ func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Qu
 // define "content" without colliding with the others.
 func (s *Server) parseTemplates() error {
 	s.pages = map[string]*template.Template{}
-	for _, name := range []string{"browse", "playable", "jobs", "watch", "error"} {
+	for _, name := range []string{"browse", "playable", "recent", "jobs", "watch", "error"} {
 		t, err := template.New("layout.html").Funcs(funcs).
 			ParseFS(templateFS, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
@@ -102,6 +106,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /browse/", s.handleBrowse)
 	mux.HandleFunc("GET /playable/", s.handlePlayable)
+	mux.HandleFunc("GET /recent/", s.handleRecent)
+	mux.HandleFunc("POST /api/progress", s.handleProgress)
+	mux.HandleFunc("POST /recent/forget", s.handleForget)
 	mux.HandleFunc("GET /watch/", s.handleWatch)
 	mux.HandleFunc("GET /jobs", s.handleJobs)
 

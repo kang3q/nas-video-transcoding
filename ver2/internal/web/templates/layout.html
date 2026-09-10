@@ -13,6 +13,7 @@
   <nav>
     <a href="/browse/" {{if eq .Nav "browse"}}class="on"{{end}}>라이브러리</a>
     <a href="/playable/" {{if eq .Nav "playable"}}class="on"{{end}}>재생 가능</a>
+    <a href="/recent/" {{if eq .Nav "recent"}}class="on"{{end}}>마지막 시청</a>
     <a href="/jobs" {{if eq .Nav "jobs"}}class="on"{{end}}>변환 작업 <span id="queue-badge" class="badge" hidden></span></a>
   </nav>
 </header>

@@ -7,7 +7,8 @@
 {{if .Codecs}}<p class="meta">{{.Codecs}}</p>{{end}}
 
 {{if .Converted}}
-  <video controls preload="metadata" {{if not .TrackURL}}src="{{.MediaURL}}"{{end}}>
+  <video controls preload="metadata" data-rel="{{.Rel}}" data-resume="{{.ResumeAt}}"
+         {{if not .TrackURL}}src="{{.MediaURL}}"{{end}}>
     {{if .TrackURL}}
     <source src="{{.MediaURL}}" type="video/mp4">
     <track kind="subtitles" src="{{.TrackURL}}" srclang="ko" label="한국어" default>
@@ -18,6 +19,11 @@
     브라우저에서는 이 페이지가 얹어주는 자막이 나옵니다 — 사파리도 크롬도 위치가
     맞습니다. <strong>에어플레이로 보내면</strong> 애플TV 가 파일을 직접 받아가므로
     <strong>파일 안의 자막 트랙</strong>이 쓰이고, 리모컨의 자막 메뉴에서 켭니다.
+  </p>
+  {{end}}
+  {{if .ResumeAt}}
+  <p class="meta j-resume">
+    {{dur .ResumeAt}} 부터 이어봅니다 · <a href="#" class="j-restart">처음부터</a>
   </p>
   {{end}}
   <p class="meta">
@@ -35,7 +41,8 @@
     변환은 거기서 버튼을 눌러야 시작됩니다.
   </p>
 {{else if .PlaysAsIs}}
-  <video controls preload="metadata" src="{{.SourceURL}}"></video>
+  <video controls preload="metadata" data-rel="{{.Rel}}" data-resume="{{.ResumeAt}}"
+         src="{{.SourceURL}}"></video>
   <p class="hint">
     이미 H.264 + AAC 로 된 MP4 라 변환할 것이 없습니다. 원본을 그대로 재생하고
     있습니다.

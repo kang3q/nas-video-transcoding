@@ -18,6 +18,7 @@ import (
 
 	"nvt/ver2/internal/config"
 	"nvt/ver2/internal/ffmpeg"
+	"nvt/ver2/internal/history"
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -167,7 +168,7 @@ func newEnv(t *testing.T, blocking bool, files ...string) *env {
 		OutputDir: out, SourceDir: src, StateDir: state,
 		Live: true, SegmentSecs: 4,
 	}
-	s, err := New(cfg, m, library.New(m), q, prober, subs.NewFinder(m, prober))
+	s, err := New(cfg, m, library.New(m), q, prober, subs.NewFinder(m, prober), history.New(state))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1758,4 +1759,97 @@ func TestTheSubtitleMethodIsOfferedOnlyWhenItCosts(t *testing.T) {
 	if !strings.Contains(body, `name="burn"`) {
 		t.Errorf("the choice is missing where it actually costs something:\n%s", body)
 	}
+}
+
+// --- picking up where you stopped ---
+
+// The player reports where it got to; the page uses that before anyone
+// presses play. Both halves have to be there or neither is any use.
+func TestPlaybackResumesWhereItStopped(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing watched yet: the player starts at the beginning and says so by
+	// asking for nothing.
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `data-resume="0"`) {
+		t.Errorf("a fresh file should have no position:\n%s", body)
+	}
+
+	rec := postJSON(t, e.h, "/api/progress", `{"rel":"a.mkv","pos":615,"duration":1440}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("reporting a position got %d", rec.Code)
+	}
+
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `data-resume="615"`) {
+		t.Errorf("the position did not reach the player:\n%s", body)
+	}
+	if !strings.Contains(body, "부터 이어봅니다") || !strings.Contains(body, "처음부터") {
+		t.Errorf("nothing says it will resume, or offers not to:\n%s", body)
+	}
+
+	// And it appears in the list, newest first.
+	list := get(t, e.h, "/recent/").Body.String()
+	if !strings.Contains(list, "a.mkv") {
+		t.Errorf("not listed as watched:\n%s", list)
+	}
+}
+
+// The last minutes are credits and the first half minute is titles.
+// Resuming into either is the same as not resuming.
+func TestTheEndsOfAnEpisodeAreNotResumed(t *testing.T) {
+	e := newEnv(t, false, "a.mkv", "b.mkv")
+	for _, f := range []string{"a.mp4", "b.mp4"} {
+		if err := os.WriteFile(filepath.Join(e.out, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	postJSON(t, e.h, "/api/progress", `{"rel":"a.mkv","pos":5,"duration":1440}`)
+	postJSON(t, e.h, "/api/progress", `{"rel":"b.mkv","pos":1438,"duration":1440}`)
+
+	for _, rel := range []string{"a.mkv", "b.mkv"} {
+		body := get(t, e.h, "/watch/"+rel).Body.String()
+		if !strings.Contains(body, `data-resume="0"`) {
+			t.Errorf("%s offered to resume the titles or the credits:\n%s", rel, body)
+		}
+	}
+	// The finished one still says so, which is worth knowing.
+	if list := get(t, e.h, "/recent/").Body.String(); !strings.Contains(list, "다 봄") {
+		t.Errorf("a finished episode is not marked:\n%s", list)
+	}
+}
+
+// A position for a path outside the library is not a position.
+func TestProgressRejectsAPathItShouldNotKnow(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	for _, bad := range []string{`{"rel":"../etc/passwd","pos":1}`, `{"rel":"","pos":1}`, `not json`} {
+		if rec := postJSON(t, e.h, "/api/progress", bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s got %d, want 400", bad, rec.Code)
+		}
+	}
+}
+
+func TestForgettingOneWatchedTitle(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	postJSON(t, e.h, "/api/progress", `{"rel":"a.mkv","pos":615,"duration":1440}`)
+
+	rec := post(t, e.h, "/recent/forget", url.Values{"rel": {"a.mkv"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if body := get(t, e.h, "/recent/").Body.String(); strings.Contains(body, "a.mkv") {
+		t.Errorf("still listed:\n%s", body)
+	}
+}
+
+func postJSON(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

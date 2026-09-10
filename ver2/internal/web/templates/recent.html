@@ -1,0 +1,46 @@
+{{define "content"}}
+<h1>마지막 시청</h1>
+
+{{if not .Rows}}
+  <p class="empty">아직 본 것이 없습니다.</p>
+  <p class="hint"><a href="/playable/">재생 가능</a>에서 하나 골라 보세요.</p>
+{{else}}
+<ul class="listing">
+  {{range .Rows}}
+  <li class="video">
+    <div class="line">
+      {{if .Missing}}
+        <span class="name muted">{{.Name}}</span>
+      {{else}}
+        <a class="name" href="{{.Href}}">{{.Name}}</a>
+      {{end}}
+      {{if .Done}}
+        <span class="tag done">다 봄</span>
+      {{else if .Resumable}}
+        <span class="tag">{{dur .Pos}}{{if .Duration}} / {{dur .Duration}}{{end}}</span>
+      {{else}}
+        <span class="tag">막 시작</span>
+      {{end}}
+      {{if .Missing}}<span class="meta">파일이 없습니다</span>{{end}}
+    </div>
+    {{if and .Duration (not .Done)}}
+    <div class="bar"><span style="width: {{pctwidth .Percent}}"></span></div>
+    {{end}}
+    <div class="actions">
+      <form method="post" action="/recent/forget">
+        <input type="hidden" name="rel" value="{{.Rel}}">
+        <button class="small">목록에서 지우기</button>
+      </form>
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+
+<p class="hint">
+  재생기가 몇 초마다 위치를 알려주므로, 다시 열면 그 지점부터 이어집니다.
+  <strong>에어플레이로 TV에서 보는 동안에도 기록됩니다</strong> — 그때 페이지는
+  리모컨 역할이고, 재생 위치는 계속 세고 있습니다. 여기서 지워도 변환된 파일은
+  그대로 남습니다.
+</p>
+{{end}}

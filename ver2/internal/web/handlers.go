@@ -118,6 +118,11 @@ type watchData struct {
 	// seconds and an hour. Where it is false the file is re-encoded either
 	// way and there is no such trade to put to anyone.
 	CanRemux bool
+
+	// ResumeAt is where playback stopped last time, in seconds, or 0. The
+	// player is told rather than asked, because the position has to be set
+	// before anyone presses play.
+	ResumeAt float64
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +195,10 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 			data.MisleadingExt = true
 		}
 	}
+	if e, ok := s.history.Get(rel.String()); ok && e.Resumable() {
+		data.ResumeAt = e.Pos
+	}
+
 	data.Subs = s.subs.Find(rel)
 	if t, ok := subs.PickLang(data.Subs, "kor"); ok {
 		data.DefaultSub = t.ID

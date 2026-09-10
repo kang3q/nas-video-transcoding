@@ -16,6 +16,7 @@ import (
 
 	"nvt/ver2/internal/config"
 	"nvt/ver2/internal/ffmpeg"
+	"nvt/ver2/internal/history"
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -110,7 +111,8 @@ func main() {
 	defer stopNotify()
 	go watcher.Run(notifyCtx)
 
-	srv, err := web.New(cfg, mapper, library.New(mapper), queue, prober, subFinder)
+	watched := history.New(cfg.StateDir)
+	srv, err := web.New(cfg, mapper, library.New(mapper), queue, prober, subFinder, watched)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
@@ -150,7 +152,7 @@ func main() {
 			"With compose they come from a .env in the same folder as the compose file.")
 	}
 
-	go flushPeriodically(prober)
+	go flushPeriodically(prober, watched)
 
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -171,10 +173,12 @@ func main() {
 	// that was running is recorded as still to do rather than as cancelled.
 	queue.Shutdown(ctx)
 	prober.Flush()
+	watched.Flush()
 }
 
-func flushPeriodically(p *mediainfo.Prober) {
+func flushPeriodically(p *mediainfo.Prober, h *history.Store) {
 	for range time.Tick(60 * time.Second) {
 		p.Flush()
+		h.Flush()
 	}
 }

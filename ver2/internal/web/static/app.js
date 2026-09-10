@@ -52,6 +52,66 @@
     }).catch(function () {});
   });
 
+  // Where you stopped, and getting back there.
+  //
+  // The position is reported while AirPlay is running too: the page becomes
+  // the remote control and the video element goes on counting, so an episode
+  // half watched on the television is half watched here as well.
+  document.querySelectorAll("video[data-rel]").forEach(function (video) {
+    var rel = video.getAttribute("data-rel");
+    var resume = parseFloat(video.getAttribute("data-resume")) || 0;
+    var lastSent = -1;
+
+    function report(force) {
+      var pos = video.currentTime;
+      if (!isFinite(pos) || pos < 0) return;
+      // Every ten seconds is often enough to lose nothing that matters, and
+      // rare enough that a NAS is not answering a request per frame.
+      if (!force && Math.abs(pos - lastSent) < 10) return;
+      lastSent = pos;
+      var body = JSON.stringify({
+        rel: rel, pos: pos,
+        duration: isFinite(video.duration) ? video.duration : 0,
+      });
+      // A page being closed has no time for a round trip; a beacon is
+      // handed to the browser and survives the navigation.
+      if (force && navigator.sendBeacon) {
+        navigator.sendBeacon("/api/progress", new Blob([body], { type: "application/json" }));
+        return;
+      }
+      fetch("/api/progress", { method: "POST", body: body, keepalive: true }).catch(function () {});
+    }
+
+    if (resume > 0) {
+      var seek = function () {
+        // Seeking before the duration is known lands nowhere.
+        if (video.duration && resume < video.duration) video.currentTime = resume;
+        video.removeEventListener("loadedmetadata", seek);
+      };
+      if (video.readyState >= 1) seek();
+      else video.addEventListener("loadedmetadata", seek);
+    }
+
+    video.addEventListener("timeupdate", function () { report(false); });
+    video.addEventListener("pause", function () { report(true); });
+    video.addEventListener("ended", function () { report(true); });
+    window.addEventListener("pagehide", function () { report(true); });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") report(true);
+    });
+
+    var restart = document.querySelector(".j-restart");
+    if (restart) {
+      restart.addEventListener("click", function (e) {
+        e.preventDefault();
+        video.currentTime = 0;
+        var note = document.querySelector(".j-resume");
+        if (note) note.hidden = true;
+        video.play().catch(function () {});
+      });
+    }
+  });
+
   // Count down to the point where playback can run to the end without
   // overtaking the encoder.
   document.querySelectorAll(".j-ready[data-ready]").forEach(function (el) {
