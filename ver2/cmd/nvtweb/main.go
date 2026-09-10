@@ -134,8 +134,9 @@ func main() {
 		cfg.Workers, cfg.Threads, cfg.Preset, cfg.VideoBitrate, cfg.AudioBitrate, cfg.CheckpointPercent)
 	log.Printf("live preview=%v segment=%ds", cfg.Live, cfg.SegmentSecs)
 	if cfg.User != "" {
-		log.Printf("basic auth: on (user %q). AirPlay cannot use it — the Apple TV "+
-			"fetches the file itself and has no credentials to send.", cfg.User)
+		log.Printf("basic auth: on (user %q). Media links are signed so AirPlay "+
+			"still works: the Apple TV fetches the file itself and has no "+
+			"password to send.", cfg.User)
 	} else {
 		log.Print("basic auth: off")
 	}

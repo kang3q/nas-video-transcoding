@@ -24,6 +24,11 @@ type Config struct {
 	User string // optional basic auth
 	Pass string
 
+	// Secret signs media links so an Apple TV can fetch them without a
+	// password. Normally left empty and generated into the state directory;
+	// set it to share one key across several instances.
+	Secret string
+
 	FFmpegBin  string
 	FFprobeBin string
 
@@ -69,6 +74,7 @@ func Load() (*Config, error) {
 		Listen:    env("NVT2_LISTEN", ":8080"),
 		User:      env("NVT2_USER", ""),
 		Pass:      env("NVT2_PASS", ""),
+		Secret:    env("NVT2_SECRET", ""),
 
 		FFmpegBin:  env("NVT2_FFMPEG", "ffmpeg"),
 		FFprobeBin: env("NVT2_FFPROBE", "ffprobe"),

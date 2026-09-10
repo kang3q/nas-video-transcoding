@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -1234,3 +1236,113 @@ type flushProbe struct {
 }
 
 func (f *flushProbe) Flush() { f.onFlush() }
+
+// --- signed media links ---
+
+// AirPlay hands the file to a television, which has no password and nowhere to
+// type one. A link minted for a viewer who did log in has to work on its own.
+func TestSignedMediaLinksWorkWithoutAPassword(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	e.srv.cfg.User, e.srv.cfg.Pass = "u", "p"
+	if err := os.WriteFile(filepath.Join(e.out, "a.mp4"), []byte("converted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := e.srv.Handler()
+
+	// The page itself is still behind the password.
+	if got := get(t, h, "/watch/a.mkv").Code; got != http.StatusUnauthorized {
+		t.Fatalf("the page was reachable without logging in: %d", got)
+	}
+
+	req := httptest.NewRequest("GET", "/watch/a.mkv", nil)
+	req.SetBasicAuth("u", "p")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	link := mediaSrc(t, rec.Body.String())
+	if !strings.Contains(link, signParam+"=") {
+		t.Fatalf("the player's link carries no token: %q", link)
+	}
+	if got := get(t, h, link).Code; got != http.StatusOK {
+		t.Errorf("a signed link was refused: %d (%s)", got, link)
+	}
+
+	// The signature covers the path, so it cannot be carried to another file.
+	other := strings.Replace(link, "/media/a.mp4", "/media/b.mp4", 1)
+	if got := get(t, h, other).Code; got == http.StatusOK {
+		t.Error("a token for one file opened another")
+	}
+	// And an unsigned request for the same file is still refused.
+	if got := get(t, h, "/media/a.mp4").Code; got != http.StatusUnauthorized {
+		t.Errorf("the file was reachable with no token at all: %d", got)
+	}
+}
+
+// An expired token is no token.
+func TestSignedLinksExpire(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	e.srv.cfg.User, e.srv.cfg.Pass = "u", "p"
+
+	const path = "/media/a.mp4"
+	if !e.srv.signedOK(path, tokenFor(e.srv, path, time.Now().Add(time.Hour))) {
+		t.Error("a fresh token was refused")
+	}
+	if e.srv.signedOK(path, tokenFor(e.srv, path, time.Now().Add(-time.Minute))) {
+		t.Error("an expired token was accepted")
+	}
+	if e.srv.signedOK(path, "9999999999.deadbeef") {
+		t.Error("a forged token was accepted")
+	}
+}
+
+func tokenFor(s *Server, path string, exp time.Time) string {
+	return fmt.Sprintf("%d.%s", exp.Unix(), mac(s.secret, path, exp.Unix()))
+}
+
+// A player is handed one URL and follows it to the segments itself. Signing
+// the playlist and not what it points at would authorise the table of
+// contents and none of the video.
+func TestThePlaylistSignsWhatItPointsAt(t *testing.T) {
+	e := newEnv(t, false, "a.mkv")
+	e.srv.cfg.User, e.srv.cfg.Pass = "u", "p"
+
+	const playlist = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4.0,\nseg00000.m4s\n"
+	got := string(e.srv.signPlaylist([]byte(playlist), "/live/abc/"))
+
+	for _, want := range []string{"/live/abc/seg00000.m4s?", "/live/abc/init.mp4?"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "#EXT-X-VERSION:7\n") {
+		t.Errorf("a tag was damaged:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "\n") {
+		t.Errorf("the playlist lost its final newline:\n%q", got)
+	}
+
+	// With no password there is nothing to work around, and plain names are
+	// what every player already handles.
+	e.srv.cfg.User = ""
+	if plain := string(e.srv.signPlaylist([]byte(playlist), "/live/abc/")); plain != playlist {
+		t.Errorf("an unguarded playlist was rewritten:\n%s", plain)
+	}
+}
+
+// mediaSrc pulls the player's source URL out of a rendered page.
+func mediaSrc(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, `src="/media/`)
+	if i < 0 {
+		t.Fatalf("no player in:\n%s", body)
+	}
+	rest := body[i+len(`src="`):]
+	j := strings.IndexByte(rest, '"')
+	if j < 0 {
+		t.Fatal("unterminated src")
+	}
+	return html.UnescapeString(rest[:j])
+}

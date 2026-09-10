@@ -46,6 +46,8 @@ type Prober interface {
 }
 
 type Server struct {
+	secret []byte // signs media links, so AirPlay can fetch past basic auth
+
 	cfg    *config.Config
 	mapper *outpath.Mapper
 	lib    *library.Library
@@ -61,6 +63,11 @@ func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Qu
 	if err := s.parseTemplates(); err != nil {
 		return nil, err
 	}
+	secret, err := loadSecret(cfg.StateDir, cfg.Secret)
+	if err != nil {
+		return nil, err
+	}
+	s.secret = secret
 	return s, nil
 }
 
@@ -127,6 +134,13 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A television has nowhere to type a password. A link the browser
+		// minted after logging in carries its own permission instead, good
+		// for that one path and only for a day.
+		if mediaPathPrefix(r.URL.Path) && s.signedOK(r.URL.Path, r.URL.Query().Get(signParam)) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		u, p, ok := r.BasicAuth()
 		okUser := subtle.ConstantTimeCompare([]byte(u), []byte(s.cfg.User)) == 1
 		okPass := subtle.ConstantTimeCompare([]byte(p), []byte(s.cfg.Pass)) == 1

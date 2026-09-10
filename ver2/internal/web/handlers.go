@@ -119,14 +119,14 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := os.Stat(s.mapper.Output(rel)); err == nil {
 		data.Converted = true
-		data.MediaURL = "/media/" + mediaPath(rel)
+		data.MediaURL = s.sign("/media/" + mediaPath(rel))
 	}
 	if v, ok := s.queue.ByRel(rel); ok {
 		jv := v
 		data.Job = &jv
 		data.BatchID = v.BatchID
 		if v.State == jobs.Running && v.Live && s.queue.LiveDirFor(v.ID) != "" {
-			data.LiveURL = "/live/" + v.ID + "/index.m3u8"
+			data.LiveURL = s.sign("/live/" + v.ID + "/index.m3u8")
 		}
 	}
 	data.LiveOn = s.cfg.Live
@@ -148,7 +148,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		data.Codecs = describe(info)
 		if info.BrowserReady() {
 			data.PlaysAsIs = true
-			data.SourceURL = "/source/" + rel.String()
+			data.SourceURL = s.sign("/source/" + rel.String())
 		}
 	}
 	data.Subs = s.subs.Find(rel)
@@ -284,7 +284,7 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write(startAtZero(b))
+		w.Write(s.signPlaylist(startAtZero(b), "/live/"+id+"/"))
 		return
 	}
 
@@ -326,6 +326,50 @@ func startAtZero(b []byte) []byte {
 	out = append(out, head...)
 	out = append(out, tag...)
 	return append(out, b[len(head):]...)
+}
+
+// signPlaylist attaches a token to everything the playlist points at.
+//
+// A player is handed one URL and follows it to the segments itself, and an
+// Apple TV following them has no password either. Signing only the playlist
+// would authorise the table of contents and none of the video.
+func (s *Server) signPlaylist(b []byte, base string) []byte {
+	if s.cfg.User == "" {
+		return b
+	}
+	var out bytes.Buffer
+	for _, line := range bytes.Split(bytes.TrimRight(b, "\n"), []byte("\n")) {
+		switch {
+		case len(bytes.TrimSpace(line)) == 0:
+		case bytes.HasPrefix(line, []byte("#EXT-X-MAP:")):
+			// The initialisation segment is named in an attribute rather than
+			// on a line of its own: URI="init.mp4".
+			line = signMapURI(line, func(name string) string { return s.sign(base + name) })
+		case line[0] == '#':
+		default:
+			line = []byte(s.sign(base + string(bytes.TrimSpace(line))))
+		}
+		out.Write(line)
+		out.WriteByte('\n')
+	}
+	return out.Bytes()
+}
+
+func signMapURI(line []byte, sign func(string) string) []byte {
+	const key = `URI="`
+	i := bytes.Index(line, []byte(key))
+	if i < 0 {
+		return line
+	}
+	rest := line[i+len(key):]
+	j := bytes.IndexByte(rest, '"')
+	if j < 0 {
+		return line
+	}
+	var out []byte
+	out = append(out, line[:i+len(key)]...)
+	out = append(out, sign(string(rest[:j]))...)
+	return append(out, rest[j:]...)
 }
 
 func isHex(s string) bool {
@@ -574,7 +618,7 @@ func (s *Server) handleAirPlay(w http.ResponseWriter, r *http.Request) {
 	for _, v := range airplay.Variants {
 		c := clipView{
 			Variant: v,
-			URL:     (&url.URL{Path: "/media/" + dir + "/" + v.File()}).String(),
+			URL:     s.sign("/media/" + dir + "/" + v.File()),
 			Codecs:  describeVariant(v),
 		}
 		if _, err := os.Stat(filepath.Join(s.cfg.OutputDir, filepath.FromSlash(dir), v.File())); err == nil {
