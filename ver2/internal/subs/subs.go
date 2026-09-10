@@ -74,6 +74,41 @@ func (t Track) Korean() bool {
 // an overlay filter rather than libass, which is not wired up.
 func (t Track) Burnable() bool { return !t.Bitmap }
 
+// Format is what to hand ffmpeg at the end.
+//
+// The two are not interchangeable, and which one is right depends on what
+// happens next. libass draws ASS, so burning needs it. A track inside an MP4
+// is tx3g, and tx3g carries the position of the text on screen — which means
+// ffmpeg has to invent those coordinates from whatever it was given. Handing
+// it an ASS file means handing it PlayResX/PlayResY and margins from a
+// subtitle that knew nothing about this video's dimensions, and the result
+// lands wherever that arithmetic puts it. SRT has no geometry at all, so the
+// player falls back to its own idea of where subtitles go, which is the one
+// place viewers expect them.
+type Format string
+
+const (
+	// FormatASS is for burning: libass needs it and honours its styling.
+	FormatASS Format = "ass"
+	// FormatSRT is for a subtitle track: plain lines and timings, no
+	// positioning for anything downstream to get wrong.
+	FormatSRT Format = "srt"
+)
+
+func (f Format) ext() string {
+	if f == FormatSRT {
+		return ".srt"
+	}
+	return ".ass"
+}
+
+func (f Format) codec() string {
+	if f == FormatSRT {
+		return "srt"
+	}
+	return "ass"
+}
+
 // sidecarExt are subtitle files worth looking for beside a video.
 var sidecarExt = map[string]bool{
 	".srt": true, ".ass": true, ".ssa": true, ".smi": true,
@@ -347,7 +382,7 @@ type Preparer struct {
 
 // Prepare writes the subtitle somewhere safe and returns its path along with
 // a cleanup function.
-func (p *Preparer) Prepare(ctx context.Context, jobID string, rel outpath.Rel, id string) (string, func(), error) {
+func (p *Preparer) Prepare(ctx context.Context, jobID string, rel outpath.Rel, id string, f Format) (string, func(), error) {
 	noop := func() {}
 	if id == "" {
 		return "", noop, nil
@@ -365,9 +400,9 @@ func (p *Preparer) Prepare(ctx context.Context, jobID string, rel outpath.Rel, i
 	var err error
 	switch Kind(kind) {
 	case Embedded:
-		out, err = p.extract(ctx, jobID, rel, arg)
+		out, err = p.extract(ctx, jobID, rel, arg, f)
 	case Sidecar:
-		out, err = p.convertSidecar(ctx, jobID, arg)
+		out, err = p.convertSidecar(ctx, jobID, arg, f)
 	default:
 		err = fmt.Errorf("subs: unknown track kind %q", kind)
 	}
@@ -382,25 +417,25 @@ func (p *Preparer) Prepare(ctx context.Context, jobID string, rel outpath.Rel, i
 // a filename full of brackets and colons — this avoids the question.
 // extract pulls an embedded track out to a file of its own. It shares the
 // empty-output trap with convertSidecar, and the same guard.
-func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, arg string) (string, error) {
+func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, arg string, f Format) (string, error) {
 	idx, err := strconv.Atoi(arg)
 	if err != nil {
 		return "", fmt.Errorf("subs: bad stream index %q", arg)
 	}
-	out := filepath.Join(p.TempDir, jobID+".ass")
+	out := filepath.Join(p.TempDir, jobID+f.ext())
 
 	cmd := exec.CommandContext(ctx, p.FFmpeg,
 		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
 		"-i", p.Mapper.Source(rel),
 		"-map", fmt.Sprintf("0:%d", idx),
-		"-c:s", "ass",
+		"-c:s", f.codec(),
 		out,
 	)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(out)
 		return "", fmt.Errorf("subs: extracting stream %d: %w: %s", idx, err, strings.TrimSpace(string(b)))
 	}
-	if err := checkHasDialogue(out, fmt.Sprintf("stream %d of %s", idx, rel.Base())); err != nil {
+	if err := checkHasDialogue(out, f, fmt.Sprintf("stream %d of %s", idx, rel.Base())); err != nil {
 		os.Remove(out)
 		return "", err
 	}
@@ -409,7 +444,7 @@ func (p *Preparer) extract(ctx context.Context, jobID string, rel outpath.Rel, a
 
 // convertSidecar reads a subtitle file, fixes its encoding, and normalises it
 // to ASS so libass has something it definitely understands.
-func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string) (string, error) {
+func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string, f Format) (string, error) {
 	rel, err := p.Mapper.ParseRel(relPath)
 	if err != nil {
 		return "", err
@@ -431,16 +466,16 @@ func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string) (s
 	}
 	defer os.Remove(staged)
 
-	out := filepath.Join(p.TempDir, jobID+".ass")
+	out := filepath.Join(p.TempDir, jobID+f.ext())
 	cmd := exec.CommandContext(ctx, p.FFmpeg,
 		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-		"-i", staged, "-c:s", "ass", out,
+		"-i", staged, "-c:s", f.codec(), out,
 	)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(out)
 		return "", fmt.Errorf("subs: converting %s: %w: %s", rel.Base(), err, strings.TrimSpace(string(b)))
 	}
-	if err := checkHasDialogue(out, rel.Base()); err != nil {
+	if err := checkHasDialogue(out, f, rel.Base()); err != nil {
 		os.Remove(out)
 		return "", err
 	}
@@ -454,12 +489,18 @@ func (p *Preparer) convertSidecar(ctx context.Context, jobID, relPath string) (s
 // enough that the demuxer reads the header and finds no cues. Burning that in
 // succeeds: it draws nothing, over an hour, and the only way to discover it is
 // to watch the result. Failing here costs a minute and says why.
-func checkHasDialogue(path, name string) error {
+func checkHasDialogue(path string, f Format, name string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	if !bytes.Contains(b, []byte("\nDialogue:")) {
+	// An ASS file lists its cues as "Dialogue:"; an SRT marks each one with
+	// its timing arrow. Either way, none means nothing to show.
+	marker := []byte("\nDialogue:")
+	if f == FormatSRT {
+		marker = []byte(" --> ")
+	}
+	if !bytes.Contains(b, marker) {
 		return fmt.Errorf("subs: %s produced no subtitle lines — "+
 			"ffmpeg read the file but found nothing to show", name)
 	}
@@ -502,7 +543,7 @@ type Resolver struct {
 	Preparer *Preparer
 }
 
-func (r *Resolver) Resolve(ctx context.Context, jobID string, rel outpath.Rel, preferredID, preferLang string) (string, func(), error) {
+func (r *Resolver) Resolve(ctx context.Context, jobID string, rel outpath.Rel, preferredID, preferLang string, f Format) (string, func(), error) {
 	noop := func() {}
 	tracks := r.Finder.Find(rel)
 	if len(tracks) == 0 {
@@ -534,6 +575,10 @@ func (r *Resolver) Resolve(ctx context.Context, jobID string, rel outpath.Rel, p
 	// Which subtitle went into the picture is the thing most often wrong and
 	// the thing hardest to check afterwards: it is drawn into the frames, so
 	// the only other way to tell is to watch the file. Say it here.
-	log.Printf("burning subtitles into %s: %s", rel.Base(), chosen.Label)
-	return r.Preparer.Prepare(ctx, jobID, rel, chosen.ID)
+	if f == FormatSRT {
+		log.Printf("adding a subtitle track to %s: %s", rel.Base(), chosen.Label)
+	} else {
+		log.Printf("burning subtitles into %s: %s", rel.Base(), chosen.Label)
+	}
+	return r.Preparer.Prepare(ctx, jobID, rel, chosen.ID, f)
 }

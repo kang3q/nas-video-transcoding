@@ -26,6 +26,7 @@ import (
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 )
 
 type State string
@@ -69,10 +70,11 @@ type Options struct {
 	Burn bool
 }
 
-// SubResolver produces the subtitle file to burn into one video, or "" when
-// there is nothing to burn.
+// SubResolver produces the subtitle file for one video, or "" when there is
+// nothing to use. The format matters: burning needs ASS, a track inside the
+// MP4 needs SRT. See [subs.Format].
 type SubResolver interface {
-	Resolve(ctx context.Context, jobID string, rel outpath.Rel, preferredID, preferLang string) (path string, cleanup func(), err error)
+	Resolve(ctx context.Context, jobID string, rel outpath.Rel, preferredID, preferLang string, format subs.Format) (path string, cleanup func(), err error)
 }
 
 type Job struct {
@@ -757,10 +759,14 @@ func (q *Queue) plan(ctx context.Context, j *Job) (ffmpeg.Spec, func(), error) {
 		audioIdx = audio[0].Index
 	}
 
+	format := subs.FormatSRT
+	if j.opts.Burn {
+		format = subs.FormatASS
+	}
 	var burn string
 	cleanup := noop
 	if j.opts.Subtitles && q.subtitles != nil {
-		burn, cleanup, err = q.subtitles.Resolve(ctx, j.ID, j.Rel, j.preferredSub, j.opts.SubtitleLang)
+		burn, cleanup, err = q.subtitles.Resolve(ctx, j.ID, j.Rel, j.preferredSub, j.opts.SubtitleLang, format)
 		if err != nil {
 			return ffmpeg.Spec{}, noop, err
 		}

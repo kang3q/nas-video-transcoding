@@ -254,10 +254,10 @@ func TestLangFromName(t *testing.T) {
 
 func TestPrepareRejectsAMalformedID(t *testing.T) {
 	p := &Preparer{TempDir: t.TempDir(), FFmpeg: "false"}
-	if _, _, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "nonsense"); err == nil {
+	if _, _, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "nonsense", FormatASS); err == nil {
 		t.Error("a malformed track id was accepted")
 	}
-	if _, _, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "elsewhere:1"); err == nil {
+	if _, _, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "elsewhere:1", FormatASS); err == nil {
 		t.Error("an unknown track kind was accepted")
 	}
 }
@@ -265,7 +265,7 @@ func TestPrepareRejectsAMalformedID(t *testing.T) {
 // No subtitle chosen is the common case and must not be an error.
 func TestPrepareWithNoSelection(t *testing.T) {
 	p := &Preparer{TempDir: t.TempDir(), FFmpeg: "false"}
-	path, cleanup, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "")
+	path, cleanup, err := p.Prepare(t.Context(), "job1", outpath.Rel{}, "", FormatASS)
 	if err != nil || path != "" {
 		t.Errorf("Prepare(\"\") = %q, %v", path, err)
 	}
@@ -420,7 +420,7 @@ func TestResolveSaysWhatItBurned(t *testing.T) {
 	// A resolver with no preparer would panic, so only the decision is
 	// exercised here — the point is the line it writes on the way through.
 	r := &Resolver{Finder: f}
-	if _, _, err := r.Resolve(context.Background(), "job1", rel(t, m, "Other.mkv"), "", ""); err != nil {
+	if _, _, err := r.Resolve(context.Background(), "job1", rel(t, m, "Other.mkv"), "", "", FormatSRT); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "no subtitles found for Other.mkv") {
@@ -441,7 +441,7 @@ func TestAnEmptySubtitleFileIsRefused(t *testing.T) {
 	), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := checkHasDialogue(empty, "Show.smi")
+	err := checkHasDialogue(empty, FormatASS, "Show.smi")
 	if err == nil {
 		t.Fatal("a subtitle file with no lines was accepted")
 	}
@@ -455,7 +455,58 @@ func TestAnEmptySubtitleFileIsRefused(t *testing.T) {
 	), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkHasDialogue(full, "Show.smi"); err != nil {
+	if err := checkHasDialogue(full, FormatASS, "Show.smi"); err != nil {
 		t.Errorf("a subtitle file with lines was refused: %v", err)
+	}
+}
+
+// A track inside an MP4 is tx3g, and tx3g carries where the text sits on
+// screen. ffmpeg has to invent those coordinates from what it is given, and
+// an ASS file gives it PlayResX/PlayResY and margins from a subtitle that
+// knew nothing about this video — the text then lands wherever that
+// arithmetic puts it, which was the bottom right corner on an iPhone and off
+// the picture entirely on a Mac. SRT carries no geometry, so the player uses
+// its own idea of where subtitles go.
+func TestSRTIsUsedForTracksAndASSForBurning(t *testing.T) {
+	if got := FormatSRT.ext(); got != ".srt" {
+		t.Errorf("FormatSRT.ext() = %q", got)
+	}
+	if got := FormatSRT.codec(); got != "srt" {
+		t.Errorf("FormatSRT.codec() = %q", got)
+	}
+	if got := FormatASS.ext(); got != ".ass" {
+		t.Errorf("FormatASS.ext() = %q", got)
+	}
+	if got := FormatASS.codec(); got != "ass" {
+		t.Errorf("FormatASS.codec() = %q", got)
+	}
+}
+
+// An empty result has to be caught in either format, and the two mark their
+// cues differently.
+func TestAnEmptySRTIsRefusedToo(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := filepath.Join(dir, "empty.srt")
+	if err := os.WriteFile(empty, []byte("\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHasDialogue(empty, FormatSRT, "Show.smi"); err == nil {
+		t.Error("an SRT with no cues was accepted")
+	}
+
+	full := filepath.Join(dir, "full.srt")
+	if err := os.WriteFile(full,
+		[]byte("1\n00:00:01,000 --> 00:00:03,000\n류크, 사과 줄까?\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHasDialogue(full, FormatSRT, "Show.smi"); err != nil {
+		t.Errorf("an SRT with cues was refused: %v", err)
+	}
+
+	// The ASS marker must not be what an SRT is judged by, or every SRT
+	// would look empty.
+	if err := checkHasDialogue(full, FormatASS, "Show.smi"); err == nil {
+		t.Error("an SRT passed the ASS check, so the marker is not being chosen")
 	}
 }

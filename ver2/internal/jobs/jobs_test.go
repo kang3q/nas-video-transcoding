@@ -14,6 +14,7 @@ import (
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
 	"nvt/ver2/internal/outpath"
+	"nvt/ver2/internal/subs"
 )
 
 // --- fakes ---
@@ -482,18 +483,26 @@ type fakeSubs struct {
 	mu        sync.Mutex
 	asked     []string
 	langs     []string
+	formats   []subs.Format
 	cleanedUp int
 }
 
-func (f *fakeSubs) Resolve(_ context.Context, _ string, _ outpath.Rel, preferred, lang string) (string, func(), error) {
+func (f *fakeSubs) Resolve(_ context.Context, _ string, _ outpath.Rel, preferred, lang string, format subs.Format) (string, func(), error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, preferred)
 	f.langs = append(f.langs, lang)
+	f.formats = append(f.formats, format)
 	f.mu.Unlock()
 	if f.err != nil {
 		return "", func() {}, f.err
 	}
 	return f.path, func() { f.mu.Lock(); f.cleanedUp++; f.mu.Unlock() }, nil
+}
+
+func (f *fakeSubs) askedFormats() []subs.Format {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]subs.Format(nil), f.formats...)
 }
 
 func (f *fakeSubs) preferences() []string {
@@ -875,5 +884,41 @@ func TestAnUnknownFileWaitsItsTurn(t *testing.T) {
 		if order[i] != want[i] {
 			t.Fatalf("order = %v, want arrival order %v", order, want)
 		}
+	}
+}
+
+// Which subtitle format is asked for is not a detail: burning needs ASS
+// because libass draws it, and a track inside the MP4 needs SRT because tx3g
+// carries positioning that ffmpeg would otherwise invent from the ASS
+// geometry — and put the text somewhere nobody wanted it.
+func TestTheSubtitleFormatFollowsWhatItIsFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		burn bool
+		want subs.Format
+	}{
+		{"a track inside the file", false, subs.FormatSRT},
+		{"drawn into the picture", true, subs.FormatASS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := fakeRunner{fn: func(_ context.Context, spec ffmpeg.Spec, _ ffmpeg.Settings, _ func(ffmpeg.Progress)) error {
+				return writeOutput(spec)
+			}}
+			h := newHarness(t, runner, 1, "a.mkv")
+			h.q.prober = fakeProber{info: h264Only()}
+			resolver := &fakeSubs{path: "/tmp/x"}
+			h.q.subtitles = resolver
+
+			if _, err := h.q.Enqueue(outpath.Root(), []outpath.Rel{h.rel(t, "a.mkv")},
+				Options{Subtitles: true, Burn: tc.burn, PickedSubtitleID: "embedded:2"}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the job to finish", func() bool { return h.states()["a.mkv"] == Done })
+
+			got := resolver.askedFormats()
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("asked for %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
