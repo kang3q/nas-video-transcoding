@@ -124,20 +124,25 @@
     </p>
 
     <fieldset class="subs">
-      <legend>자막을 넣는 방식</legend>
+      <legend>자막을 어떻게 담을지</legend>
       <label>
         <input type="radio" name="burn" value="" checked>
-        <strong>자막 트랙으로</strong> — 재생기에서 켜고 끕니다. 화면을 다시 그리지
-        않으므로 <strong>컨테이너만 바꾸면 되는 파일은 몇 초</strong>면 끝납니다.
+        <strong>별도 자막 트랙으로</strong> — 재생기에서 켜고 끕니다. 영상을 다시
+        그리지 않고 <strong>비트 그대로 복사</strong>하므로, 이미 H.264 + AAC 인
+        파일은 <strong>몇 초</strong>면 끝나고 화질도 원본 그대로입니다.
         애플TV 와 사파리는 이 트랙을 읽습니다. 크롬은 못 읽습니다.
       </label>
       <label>
         <input type="radio" name="burn" value="1">
         <strong>화면에 굽기</strong> — 그림에 박아 넣어 <strong>어디서든 보이지만
-        끌 수 없습니다.</strong> 모든 프레임을 다시 그려야 하므로 컨테이너만 바꾸면
-        될 파일도 전체 재인코딩이 됩니다.
+        끌 수 없습니다.</strong> 모든 프레임을 다시 그려야 하므로 재인코딩이
+        필요 없던 파일도 수십 분이 걸리고, 화질이 조금 손해입니다.
       </label>
     </fieldset>
+    <p class="hint">
+      어느 쪽이든 <strong>원본 파일은 그대로 둡니다.</strong> 출력 폴더에 새
+      MP4 를 만들고, 그 안에 영상·소리·자막을 함께 담습니다.
+    </p>
     {{end}}
     <p class="hint">
       아래 셋 중 무엇을 눌러도 <strong>이 파일이 가장 먼저</strong> 변환됩니다.
