@@ -43,6 +43,9 @@ type browseData struct {
 	Crumbs    []crumb
 	Rows      []row
 	HasVideos bool
+	// ConvertedHref is this same folder in the converted tree. The two
+	// mirror each other, so moving between them is worth one click.
+	ConvertedHref string
 }
 
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +59,10 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := browseData{Dir: rel.String(), Crumbs: crumbs(rel.String())}
+	data := browseData{
+		Dir: rel.String(), Crumbs: crumbs(rel.String()),
+		ConvertedHref: (&url.URL{Path: "/converted/" + rel.String()}).String(),
+	}
 	for _, e := range listing.Entries {
 		item := row{Entry: e}
 		if e.IsVideo {
@@ -571,6 +577,93 @@ func displayName(rel outpath.Rel) string {
 		return "라이브러리"
 	}
 	return rel.Base()
+}
+
+// --- the converted library ---
+
+type convertedRow struct {
+	library.Entry
+	// Href is where the name leads: further into the converted tree for a
+	// folder, or to the file's page for a video.
+	Href string
+	// SourceHref is the original this came from, when it is still there. A
+	// file whose source has been deleted or renamed is still perfectly
+	// playable, so it is listed either way.
+	SourceHref string
+}
+
+type convertedData struct {
+	Dir    string
+	Crumbs []crumb
+	Rows   []convertedRow
+	// SourceDirHref is the same folder in the original library.
+	SourceDirHref string
+	Missing       bool // nothing has been converted yet
+}
+
+func (s *Server) handleConverted(w http.ResponseWriter, r *http.Request) {
+	rel, ok := s.parsePath(w, r, "/converted/")
+	if !ok {
+		return
+	}
+
+	data := convertedData{
+		Dir:           rel.String(),
+		Crumbs:        crumbsFor("/converted/", "변환된 파일", rel.String()),
+		SourceDirHref: (&url.URL{Path: "/browse/" + rel.String()}).String(),
+	}
+
+	listing, err := s.lib.ListOutput(rel)
+	if err != nil {
+		// An empty output tree is the ordinary state before the first
+		// conversion, not a mistake worth an error page.
+		if rel.IsRoot() && os.IsNotExist(err) {
+			data.Missing = true
+			s.render(w, "converted", "변환된 파일", "converted", data)
+			return
+		}
+		s.fail(w, http.StatusNotFound, "폴더를 찾을 수 없습니다: "+rel.String())
+		return
+	}
+
+	// One read of the original directory answers "where did this come from?"
+	// for every file in it. The extension changed on the way out, so the
+	// match is on the name without it.
+	sources := map[string]outpath.Rel{}
+	if srcListing, err := s.lib.List(rel); err == nil {
+		for _, e := range srcListing.Entries {
+			if !e.IsDir && e.IsVideo {
+				sources[library.TrimExt(e.Name)] = e.Rel
+			}
+		}
+	}
+
+	for _, e := range listing.Entries {
+		row := convertedRow{Entry: e}
+		switch {
+		case e.IsDir:
+			row.Href = (&url.URL{Path: "/converted/" + e.Rel.String()}).String()
+		default:
+			// The file's page is the one with the player, the codecs and the
+			// way to discard it — the same page the library links to.
+			if src, ok := sources[library.TrimExt(e.Name)]; ok {
+				row.Href = (&url.URL{Path: "/watch/" + src.String()}).String()
+				row.SourceHref = row.Href
+			} else {
+				row.Href = s.sign("/media/" + e.Rel.String())
+			}
+		}
+		data.Rows = append(data.Rows, row)
+	}
+
+	// An empty root is the state before the first conversion, however it came
+	// about — the directory missing, or there but untouched. Both deserve the
+	// same sentence, which says what to do rather than what is absent.
+	if rel.IsRoot() && len(data.Rows) == 0 {
+		data.Missing = true
+	}
+
+	s.render(w, "converted", displayName(rel), "converted", data)
 }
 
 // --- AirPlay diagnostics ---

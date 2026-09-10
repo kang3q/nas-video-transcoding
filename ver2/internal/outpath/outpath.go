@@ -64,6 +64,10 @@ type Mapper struct {
 	// it has to be hidden rather than forbidden.
 	outRel string
 	root   *os.Root
+	// outRoot gets its own handle: browsing the converted tree walks user
+	// input through it just as browsing the library does, and the same
+	// traversal guarantee has to hold on both sides.
+	outHandle *os.Root
 }
 
 // NewMapper opens the source root for traversal-proof access. Both directories
@@ -73,10 +77,24 @@ func NewMapper(srcRoot, outRoot, outRel string) (*Mapper, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Mapper{srcRoot: srcRoot, outRoot: outRoot, outRel: outRel, root: root}, nil
+	outHandle, err := os.OpenRoot(outRoot)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	return &Mapper{
+		srcRoot: srcRoot, outRoot: outRoot, outRel: outRel,
+		root: root, outHandle: outHandle,
+	}, nil
 }
 
-func (m *Mapper) Close() error { return m.root.Close() }
+func (m *Mapper) Close() error {
+	err := m.root.Close()
+	if outErr := m.outHandle.Close(); err == nil {
+		err = outErr
+	}
+	return err
+}
 
 func (m *Mapper) SourceRoot() string { return m.srcRoot }
 func (m *Mapper) OutputRoot() string { return m.outRoot }
@@ -184,6 +202,20 @@ func (m *Mapper) Stat(r Rel) (fs.FileInfo, error) {
 // ReadDir lists a source directory through the root.
 func (m *Mapper) ReadDir(r Rel) ([]os.DirEntry, error) {
 	f, err := m.Open(r)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.ReadDir(-1)
+}
+
+// ReadOutputDir lists a directory of the converted tree, through its own root.
+func (m *Mapper) ReadOutputDir(r Rel) ([]os.DirEntry, error) {
+	name := "."
+	if !r.IsRoot() {
+		name = r.s
+	}
+	f, err := m.outHandle.Open(name)
 	if err != nil {
 		return nil, err
 	}

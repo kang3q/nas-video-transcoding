@@ -2,6 +2,7 @@
 <nav class="crumbs">
   {{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}<a href="/browse/{{$c.Path}}">{{$c.Name}}</a>{{end}}
 </nav>
+<p class="meta"><a href="{{.ConvertedHref}}">이 폴더의 변환된 파일 보기 →</a></p>
 
 {{if not .Rows}}
   <p class="empty">이 폴더는 비어 있습니다.</p>

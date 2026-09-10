@@ -12,6 +12,7 @@
   <a class="brand" href="/browse/">nvt</a>
   <nav>
     <a href="/browse/" {{if eq .Nav "browse"}}class="on"{{end}}>라이브러리</a>
+    <a href="/converted/" {{if eq .Nav "converted"}}class="on"{{end}}>변환된 파일</a>
     <a href="/jobs" {{if eq .Nav "jobs"}}class="on"{{end}}>변환 작업 <span id="queue-badge" class="badge" hidden></span></a>
   </nav>
 </header>

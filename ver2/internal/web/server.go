@@ -20,6 +20,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -75,7 +76,7 @@ func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Qu
 // define "content" without colliding with the others.
 func (s *Server) parseTemplates() error {
 	s.pages = map[string]*template.Template{}
-	for _, name := range []string{"browse", "jobs", "watch", "airplay", "error"} {
+	for _, name := range []string{"browse", "converted", "jobs", "watch", "airplay", "error"} {
 		t, err := template.New("layout.html").Funcs(funcs).
 			ParseFS(templateFS, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
@@ -93,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 		http.Redirect(w, r, "/browse/", http.StatusFound)
 	})
 	mux.HandleFunc("GET /browse/", s.handleBrowse)
+	mux.HandleFunc("GET /converted/", s.handleConverted)
 	mux.HandleFunc("GET /watch/", s.handleWatch)
 	mux.HandleFunc("GET /jobs", s.handleJobs)
 
@@ -316,6 +318,22 @@ var funcs = template.FuncMap{
 type crumb struct {
 	Name string
 	Path string
+	// Href is the whole link. The library's own pages build theirs from Path
+	// because they all sit under /browse/; the converted tree needs its own
+	// prefix, and encoding the path is not optional once Korean and spaces
+	// are in it.
+	Href string
+}
+
+// crumbsFor builds a trail under some other prefix, with its own name for the
+// root.
+func crumbsFor(base, rootName, p string) []crumb {
+	out := crumbs(p)
+	out[0].Name = rootName
+	for i := range out {
+		out[i].Href = (&url.URL{Path: base + out[i].Path}).String()
+	}
+	return out
 }
 
 func crumbs(p string) []crumb {

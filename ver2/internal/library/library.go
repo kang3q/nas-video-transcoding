@@ -83,6 +83,58 @@ func (l *Library) List(dir outpath.Rel) (Listing, error) {
 	return Listing{Dir: dir, Entries: out}, nil
 }
 
+// ListOutput reads one directory of the converted tree.
+//
+// It mirrors the library, so the same relative path means the same show in
+// both — which is what lets a converted file link back to where it came from.
+// Two things are left out: the ".part" files of conversions still running,
+// which have no index and cannot be played, and the AirPlay diagnostics,
+// which are test clips rather than anything anybody meant to keep.
+func (l *Library) ListOutput(dir outpath.Rel) (Listing, error) {
+	ents, err := l.m.ReadOutputDir(dir)
+	if err != nil {
+		return Listing{}, err
+	}
+
+	out := make([]Entry, 0, len(ents))
+	for _, de := range ents {
+		name := de.Name()
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".part") {
+			continue
+		}
+		if dir.IsRoot() && name == airplayDir {
+			continue
+		}
+		rel, err := l.m.Join(dir, name)
+		if err != nil {
+			continue
+		}
+		e := Entry{Name: name, Rel: rel, IsDir: de.IsDir()}
+		if !e.IsDir {
+			fi, err := de.Info()
+			if err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
+			e.Size = fi.Size()
+			e.IsVideo = IsVideo(rel)
+		}
+		out = append(out, e)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return NaturalLess(out[i].Name, out[j].Name)
+	})
+	return Listing{Dir: dir, Entries: out}, nil
+}
+
+// airplayDir is where the diagnostic clips live. Named here rather than
+// imported so the library does not depend on the diagnostics; it is one
+// string, and a test holds the two together.
+const airplayDir = "_airplay"
+
 // Videos lists the video files in one directory, in viewing order.
 func (l *Library) Videos(dir outpath.Rel) ([]outpath.Rel, error) {
 	listing, err := l.List(dir)

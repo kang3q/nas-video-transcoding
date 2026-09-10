@@ -283,3 +283,67 @@ func mustRel(t *testing.T, l *Library, p string) outpath.Rel {
 	}
 	return r
 }
+
+// The converted tree mirrors the library, so the same relative path means the
+// same show on both sides. What must not appear is work in progress: a .part
+// has no index and cannot be played, and the diagnostic clips are test output
+// nobody asked to keep.
+func TestListOutputHidesWhatIsNotFinished(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "media")
+	out := filepath.Join(base, "out")
+	for _, d := range []string{src, filepath.Join(out, "S"), filepath.Join(out, "_airplay", "ab12")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{
+		"ep1.mp4", "ep10.mp4", "ep2.mp4", "ep3.mp4.part", ".hidden.mp4",
+	} {
+		if err := os.WriteFile(filepath.Join(out, "S", f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "_airplay", "ab12", "a-faststart.mp4"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := outpath.NewMapper(src, out, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	lib := New(m)
+
+	top, err := lib.ListOutput(outpath.Rel{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range top.Entries {
+		if e.Name == airplayDir {
+			t.Error("the diagnostic clips are listed as library content")
+		}
+	}
+
+	dir, err := m.ParseRel("S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := lib.ListOutput(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range listing.Entries {
+		names = append(names, e.Name)
+	}
+	want := []string{"ep1.mp4", "ep2.mp4", "ep10.mp4"} // natural order, no .part, no dotfile
+	if len(names) != len(want) {
+		t.Fatalf("got %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("got %v, want %v", names, want)
+		}
+	}
+}
