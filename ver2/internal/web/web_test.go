@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"nvt/ver2/internal/airplay"
 	"nvt/ver2/internal/config"
 	"nvt/ver2/internal/ffmpeg"
 	"nvt/ver2/internal/jobs"
@@ -1101,89 +1100,6 @@ func TestDiscardDoesNotStartAnything(t *testing.T) {
 
 // --- AirPlay diagnostics ---
 
-// AirPlay says nothing about why a file will not play. Four short clips that
-// differ in one property each turn that into something answerable, so the page
-// has to show all four at once, each with its own player.
-func TestAirPlayPageOffersEveryVariant(t *testing.T) {
-	e := newEnv(t, false, "a.mkv")
-
-	body := get(t, e.h, "/airplay/a.mkv").Body.String()
-	for _, v := range airplay.Variants {
-		if !strings.Contains(body, v.Title) {
-			t.Errorf("%q is missing from the page:\n%s", v.Name, body)
-		}
-	}
-	if strings.Contains(body, "<video") {
-		t.Error("a player was offered for a clip that has not been made")
-	}
-
-	// Once the clips exist, each gets a player pointed at its own file.
-	dir := filepath.Join(e.out, filepath.FromSlash(airplay.Dir(e.rel(t, "a.mkv"))))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range airplay.Variants {
-		if err := os.WriteFile(filepath.Join(dir, v.File()), []byte("clip"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	body = get(t, e.h, "/airplay/a.mkv").Body.String()
-	if n := strings.Count(body, "<video"); n != len(airplay.Variants) {
-		t.Errorf("got %d players, want %d:\n%s", n, len(airplay.Variants), body)
-	}
-	for _, v := range airplay.Variants {
-		if !strings.Contains(body, v.File()) {
-			t.Errorf("no player points at %s", v.File())
-		}
-	}
-}
-
-// The clips are ordinary jobs, so they queue behind a real conversion rather
-// than competing with it for the one encoder this hardware has.
-func TestAirPlayProbesGoThroughTheQueue(t *testing.T) {
-	e := newEnv(t, true, "a.mkv")
-
-	rec := post(t, e.h, "/airplay", url.Values{"rel": {"a.mkv"}})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
-	}
-
-	var names []string
-	for _, v := range e.srv.queue.Snapshot() {
-		if v.Variant != "" {
-			names = append(names, v.Variant)
-		}
-	}
-	if len(names) != len(airplay.Variants) {
-		t.Fatalf("queued %v, want one job per variant", names)
-	}
-
-	// The file's real conversion must still be reachable: the diagnostics
-	// write elsewhere and must not be mistaken for it.
-	if _, ok := e.srv.queue.ByRel(e.rel(t, "a.mkv")); ok {
-		t.Error("a diagnostic clip was taken for the file's own conversion")
-	}
-}
-
-// The clips are made to answer a question being asked now. Keeping them across
-// a restart would restart an experiment nobody is waiting on.
-func TestAirPlayProbesAreNotPersisted(t *testing.T) {
-	e := newEnv(t, true, "a.mkv")
-	post(t, e.h, "/airplay", url.Values{"rel": {"a.mkv"}})
-
-	waitFor(t, "a probe to start", func() bool {
-		for _, v := range e.srv.queue.Snapshot() {
-			if v.Variant != "" && v.State == jobs.Running {
-				return true
-			}
-		}
-		return false
-	})
-	if _, err := os.Stat(filepath.Join(e.srv.cfg.StateDir, "queue.json")); err == nil {
-		t.Error("a diagnostic batch was written to the saved queue")
-	}
-}
-
 // --- the access log ---
 
 // A client being turned away and a client that never arrived look the same in
@@ -1391,69 +1307,14 @@ func TestTheFaviconDoesNotFillTheLog(t *testing.T) {
 
 // --- the converted library ---
 
-// The two trees mirror each other, so the same path means the same show on
-// both sides. That is what makes moving between them worth a link.
-func TestConvertedLibraryLinksBackToTheOriginal(t *testing.T) {
-	e := newEnv(t, false, "S/ep1.mkv", "S/ep2.mkv")
-	if err := os.MkdirAll(filepath.Join(e.out, "S"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// ep1 is converted; ep2 is still being written; a third file's source is
-	// gone, which must not hide it.
-	for name, body := range map[string]string{
-		"ep1.mp4": "done", "ep2.mp4.part": "half", "gone.mp4": "orphan",
-	} {
-		if err := os.WriteFile(filepath.Join(e.out, "S", name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	body := get(t, e.h, "/converted/S").Body.String()
-
-	if !strings.Contains(body, "/browse/S") {
-		t.Errorf("no way back to the original folder:\n%s", body)
-	}
-	if !strings.Contains(body, "/watch/S/ep1.mkv") {
-		t.Errorf("the converted file does not lead to its own page:\n%s", body)
-	}
-	if strings.Contains(body, "ep2.mp4") {
-		t.Errorf("a conversion still being written was listed:\n%s", body)
-	}
-	if !strings.Contains(body, "gone.mp4") {
-		t.Errorf("a file whose source is gone was hidden, though it still plays:\n%s", body)
-	}
-
-	// And the library links the other way, to the same folder.
-	body = get(t, e.h, "/browse/S").Body.String()
-	if !strings.Contains(body, "/converted/S") {
-		t.Errorf("the library does not link to its converted folder:\n%s", body)
-	}
-}
-
-// Before the first conversion the output tree may not exist at all. That is
-// the ordinary starting state, not something to show an error page for.
-func TestConvertedLibraryIsCalmWhenEmpty(t *testing.T) {
+// Every page needs the way into the list of what can be watched, not just
+// the ones that happen to link to it.
+func TestTheHeaderOffersThePlayableList(t *testing.T) {
 	e := newEnv(t, false, "a.mkv")
-	if err := os.RemoveAll(e.out); err != nil {
-		t.Fatal(err)
-	}
-	rec := get(t, e.h, "/converted/")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "아직 변환한 파일이 없습니다") {
-		t.Errorf("no explanation of the empty state:\n%s", rec.Body.String())
-	}
-}
-
-// Every page needs the way into the converted tree, not just the ones that
-// happen to link to it.
-func TestTheHeaderOffersTheConvertedLibrary(t *testing.T) {
-	e := newEnv(t, false, "a.mkv")
-	for _, path := range []string{"/browse/", "/jobs", "/watch/a.mkv", "/converted/"} {
+	for _, path := range []string{"/browse/", "/jobs", "/watch/a.mkv", "/playable/"} {
 		body := get(t, e.h, path).Body.String()
-		if !strings.Contains(body, `href="/converted/"`) {
-			t.Errorf("%s has no link to the converted library", path)
+		if !strings.Contains(body, `href="/playable/"`) {
+			t.Errorf("%s has no link to the playable list", path)
 		}
 	}
 }

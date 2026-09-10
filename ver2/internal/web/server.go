@@ -83,7 +83,7 @@ func New(cfg *config.Config, m *outpath.Mapper, lib *library.Library, q *jobs.Qu
 // define "content" without colliding with the others.
 func (s *Server) parseTemplates() error {
 	s.pages = map[string]*template.Template{}
-	for _, name := range []string{"browse", "playable", "converted", "jobs", "watch", "airplay", "error"} {
+	for _, name := range []string{"browse", "playable", "jobs", "watch", "error"} {
 		t, err := template.New("layout.html").Funcs(funcs).
 			ParseFS(templateFS, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
@@ -102,14 +102,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /browse/", s.handleBrowse)
 	mux.HandleFunc("GET /playable/", s.handlePlayable)
-	mux.HandleFunc("GET /converted/", s.handleConverted)
 	mux.HandleFunc("GET /watch/", s.handleWatch)
 	mux.HandleFunc("GET /jobs", s.handleJobs)
 
 	mux.HandleFunc("POST /convert", s.handleConvert)
 	mux.HandleFunc("POST /discard", s.handleDiscard)
-	mux.HandleFunc("GET /airplay/", s.handleAirPlay)
-	mux.HandleFunc("POST /airplay", s.handleAirPlayMake)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /batches/{id}/cancel", s.handleCancelBatch)
 

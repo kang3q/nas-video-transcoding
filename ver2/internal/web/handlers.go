@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"nvt/ver2/internal/airplay"
 	"nvt/ver2/internal/jobs"
 	"nvt/ver2/internal/library"
 	"nvt/ver2/internal/mediainfo"
@@ -43,9 +42,6 @@ type browseData struct {
 	Crumbs    []crumb
 	Rows      []row
 	HasVideos bool
-	// ConvertedHref is this same folder in the converted tree. The two
-	// mirror each other, so moving between them is worth one click.
-	ConvertedHref string
 }
 
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
@@ -59,10 +55,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := browseData{
-		Dir: rel.String(), Crumbs: crumbs(rel.String()),
-		ConvertedHref: (&url.URL{Path: "/converted/" + rel.String()}).String(),
-	}
+	data := browseData{Dir: rel.String(), Crumbs: crumbs(rel.String())}
 	for _, e := range listing.Entries {
 		item := row{Entry: e}
 		if e.IsVideo {
@@ -577,194 +570,6 @@ func displayName(rel outpath.Rel) string {
 		return "라이브러리"
 	}
 	return rel.Base()
-}
-
-// --- the converted library ---
-
-type convertedRow struct {
-	library.Entry
-	// Href is where the name leads: further into the converted tree for a
-	// folder, or to the file's page for a video.
-	Href string
-	// SourceHref is the original this came from, when it is still there. A
-	// file whose source has been deleted or renamed is still perfectly
-	// playable, so it is listed either way.
-	SourceHref string
-}
-
-type convertedData struct {
-	Dir    string
-	Crumbs []crumb
-	Rows   []convertedRow
-	// SourceDirHref is the same folder in the original library.
-	SourceDirHref string
-	Missing       bool // nothing has been converted yet
-}
-
-func (s *Server) handleConverted(w http.ResponseWriter, r *http.Request) {
-	rel, ok := s.parsePath(w, r, "/converted/")
-	if !ok {
-		return
-	}
-
-	data := convertedData{
-		Dir:           rel.String(),
-		Crumbs:        crumbsFor("/converted/", "변환된 파일", rel.String()),
-		SourceDirHref: (&url.URL{Path: "/browse/" + rel.String()}).String(),
-	}
-
-	listing, err := s.lib.ListOutput(rel)
-	if err != nil {
-		// An empty output tree is the ordinary state before the first
-		// conversion, not a mistake worth an error page.
-		if rel.IsRoot() && os.IsNotExist(err) {
-			data.Missing = true
-			s.render(w, "converted", "변환된 파일", "converted", data)
-			return
-		}
-		s.fail(w, http.StatusNotFound, "폴더를 찾을 수 없습니다: "+rel.String())
-		return
-	}
-
-	// One read of the original directory answers "where did this come from?"
-	// for every file in it. The extension changed on the way out, so the
-	// match is on the name without it.
-	sources := map[string]outpath.Rel{}
-	if srcListing, err := s.lib.List(rel); err == nil {
-		for _, e := range srcListing.Entries {
-			if !e.IsDir && e.IsVideo {
-				sources[library.TrimExt(e.Name)] = e.Rel
-			}
-		}
-	}
-
-	for _, e := range listing.Entries {
-		row := convertedRow{Entry: e}
-		switch {
-		case e.IsDir:
-			row.Href = (&url.URL{Path: "/converted/" + e.Rel.String()}).String()
-		default:
-			// The file's page is the one with the player, the codecs and the
-			// way to discard it — the same page the library links to.
-			if src, ok := sources[library.TrimExt(e.Name)]; ok {
-				row.Href = (&url.URL{Path: "/watch/" + src.String()}).String()
-				row.SourceHref = row.Href
-			} else {
-				row.Href = s.sign("/media/" + e.Rel.String())
-			}
-		}
-		data.Rows = append(data.Rows, row)
-	}
-
-	// An empty root is the state before the first conversion, however it came
-	// about — the directory missing, or there but untouched. Both deserve the
-	// same sentence, which says what to do rather than what is absent.
-	if rel.IsRoot() && len(data.Rows) == 0 {
-		data.Missing = true
-	}
-
-	s.render(w, "converted", displayName(rel), "converted", data)
-}
-
-// --- AirPlay diagnostics ---
-
-type clipView struct {
-	airplay.Variant
-	URL    string
-	Ready  bool
-	Codecs string
-	Job    *jobs.View
-}
-
-type airplayData struct {
-	Rel      string
-	Name     string
-	Crumbs   []crumb
-	Clips    []clipView
-	ClipSecs int
-	Any      bool // at least one clip exists or is being made
-}
-
-func (s *Server) handleAirPlay(w http.ResponseWriter, r *http.Request) {
-	rel, ok := s.parsePath(w, r, "/airplay/")
-	if !ok {
-		return
-	}
-	if rel.IsRoot() {
-		http.Redirect(w, r, "/browse/", http.StatusFound)
-		return
-	}
-
-	data := airplayData{
-		Rel: rel.String(), Name: rel.Base(),
-		Crumbs:   crumbs(rel.Dir().String()),
-		ClipSecs: airplay.ClipSecs,
-	}
-	dir := airplay.Dir(rel)
-	byVariant := map[string]jobs.View{}
-	for _, v := range s.queue.Snapshot() {
-		if v.Variant != "" && v.Rel == rel.String() {
-			byVariant[v.Variant] = v
-		}
-	}
-
-	for _, v := range airplay.Variants {
-		c := clipView{
-			Variant: v,
-			URL:     s.sign("/media/" + dir + "/" + v.File()),
-			Codecs:  describeVariant(v),
-		}
-		if _, err := os.Stat(filepath.Join(s.cfg.OutputDir, filepath.FromSlash(dir), v.File())); err == nil {
-			c.Ready = true
-			data.Any = true
-		}
-		if jv, ok := byVariant[v.Name]; ok {
-			j := jv
-			c.Job = &j
-			data.Any = true
-		}
-		data.Clips = append(data.Clips, c)
-	}
-
-	s.render(w, "airplay", "에어플레이 진단", "browse", data)
-}
-
-// describeVariant is the one-line summary under each clip's heading — the
-// settings themselves, so the page can be read without opening the source.
-func describeVariant(v airplay.Variant) string {
-	size := "원본 크기"
-	if v.MaxHeight > 0 {
-		size = fmt.Sprintf("%dp 이하", v.MaxHeight)
-	}
-	profile := v.Profile
-	if profile != "" {
-		profile = strings.ToUpper(profile[:1]) + profile[1:]
-	}
-	return fmt.Sprintf("H.264 %s@%s · %s · %s · AAC-LC %s 2ch 48kHz · faststart",
-		profile, v.Level, size, v.VideoBitrate, v.AudioBitrate)
-}
-
-func (s *Server) handleAirPlayMake(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.fail(w, http.StatusBadRequest, "요청을 읽을 수 없습니다")
-		return
-	}
-	rel, err := s.mapper.ParseRel(r.FormValue("rel"))
-	if err != nil || rel.IsRoot() {
-		s.fail(w, http.StatusBadRequest, "잘못된 경로입니다")
-		return
-	}
-	to := (&url.URL{Path: "/airplay/" + rel.String()}).String()
-
-	if _, err := s.queue.EnqueueAirPlayProbes(rel); err != nil {
-		if errors.Is(err, jobs.ErrNothingToDo) {
-			http.Redirect(w, r, to, http.StatusSeeOther)
-			return
-		}
-		s.fail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 // handleDiscard removes a conversion so it can be made again — the subtitles

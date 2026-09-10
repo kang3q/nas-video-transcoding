@@ -62,17 +62,10 @@ type Spec struct {
 	// watched before it finishes. The encode still happens once.
 	LiveDir     string
 	SegmentSecs int
-
-	// Probe, when set, replaces all of the above encoding decisions with one
-	// short diagnostic clip. See [ProbeOpts].
-	Probe *ProbeOpts
 }
 
 // Args assembles the command line.
 func Args(s Spec, set Settings) []string {
-	if s.Probe != nil {
-		return probeArgs(s, set)
-	}
 	a := []string{
 		"-nostdin", "-hide_banner", "-loglevel", "warning", "-y",
 		"-fflags", "+genpts",

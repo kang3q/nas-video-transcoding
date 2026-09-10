@@ -93,10 +93,9 @@ func (l *Library) List(dir outpath.Rel) (Listing, error) {
 // ListOutput reads one directory of the converted tree.
 //
 // It mirrors the library, so the same relative path means the same show in
-// both — which is what lets a converted file link back to where it came from.
-// Two things are left out: the ".part" files of conversions still running,
-// which have no index and cannot be played, and the AirPlay diagnostics,
-// which are test clips rather than anything anybody meant to keep.
+// both — which is what lets a conversion be traced back to its source. The
+// ".part" files of conversions still running are left out: they have no index
+// and cannot be played.
 func (l *Library) ListOutput(dir outpath.Rel) (Listing, error) {
 	ents, err := l.m.ReadOutputDir(dir)
 	if err != nil {
@@ -200,9 +199,10 @@ func (l *Library) walk(root outpath.Rel, list func(outpath.Rel) (Listing, error)
 	return out
 }
 
-// airplayDir is where the diagnostic clips live. Named here rather than
-// imported so the library does not depend on the diagnostics; it is one
-// string, and a test holds the two together.
+// airplayDir held the clips of an AirPlay diagnostic that has since been
+// removed. The folder is still skipped because the ones already written to a
+// NAS are still there, and they are test output rather than anything anybody
+// meant to keep.
 const airplayDir = "_airplay"
 
 // Videos lists the video files in one directory, in viewing order.
