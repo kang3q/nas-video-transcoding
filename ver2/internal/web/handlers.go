@@ -112,6 +112,12 @@ type watchData struct {
 	// says yes; this page opens it and finds out. Without saying so, the two
 	// screens simply contradict each other.
 	MisleadingExt bool
+
+	// CanRemux means the picture and sound are already what we want, so the
+	// choice between a subtitle track and burning is a choice between
+	// seconds and an hour. Where it is false the file is re-encoded either
+	// way and there is no such trade to put to anyone.
+	CanRemux bool
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +181,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	if probed {
 		data.Probed = true
 		data.Codecs = describe(info)
+		data.CanRemux = info.RemuxOnly()
 		switch {
 		case info.BrowserReady():
 			data.PlaysAsIs = true

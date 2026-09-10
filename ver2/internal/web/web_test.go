@@ -1549,6 +1549,16 @@ func TestOpeningAFileCorrectsThePlayableList(t *testing.T) {
 // starts on.
 func TestSubtitlesGoInAsATrackUnlessAskedToBurn(t *testing.T) {
 	e := newEnv(t, true, "a.mkv")
+	// The choice only appears where it costs something, so this file has to
+	// be one whose streams can simply be copied.
+	e.srv.prober = stubProber{info: mediainfo.Info{
+		Duration: 100,
+		Streams: []mediainfo.Stream{
+			{Index: 0, Type: "video", Codec: "h264"},
+			{Index: 1, Type: "audio", Codec: "aac"},
+			{Index: 2, Type: "subtitle", Codec: "ass", Lang: "kor"},
+		},
+	}}
 
 	body := get(t, e.h, "/watch/a.mkv").Body.String()
 	i := strings.Index(body, `name="burn" value=""`)
@@ -1715,5 +1725,37 @@ func TestDiscardRemovesTheSubtitleToo(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(e.out, name)); !os.IsNotExist(err) {
 			t.Errorf("%s is still there", name)
 		}
+	}
+}
+
+// The choice between a subtitle track and burning is a choice between
+// seconds and an hour — but only for a file whose picture and sound are
+// already what we want. Everything else is re-encoded either way, and
+// putting a trade-off to someone who has nothing to trade is just noise on
+// the page.
+func TestTheSubtitleMethodIsOfferedOnlyWhenItCosts(t *testing.T) {
+	// The stub reports HEVC, so this one is re-encoded whatever happens.
+	e := newEnv(t, false, "a.mkv")
+	body := get(t, e.h, "/watch/a.mkv").Body.String()
+	if strings.Contains(body, `name="burn"`) {
+		t.Errorf("a choice was offered on a file that is re-encoded either way:\n%s", body)
+	}
+	if !strings.Contains(body, "걸리는\n      시간이 같습니다") &&
+		!strings.Contains(body, "시간이 같습니다") {
+		t.Errorf("nothing explains why there is no choice:\n%s", body)
+	}
+
+	// H.264 + AAC: copying the streams takes seconds, burning takes an hour.
+	e.srv.prober = stubProber{info: mediainfo.Info{
+		Duration: 100,
+		Streams: []mediainfo.Stream{
+			{Index: 0, Type: "video", Codec: "h264"},
+			{Index: 1, Type: "audio", Codec: "aac"},
+			{Index: 2, Type: "subtitle", Codec: "ass", Lang: "kor"},
+		},
+	}}
+	body = get(t, e.h, "/watch/a.mkv").Body.String()
+	if !strings.Contains(body, `name="burn"`) {
+		t.Errorf("the choice is missing where it actually costs something:\n%s", body)
 	}
 }
